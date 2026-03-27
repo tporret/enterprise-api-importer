@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node / JS artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# PHP / Composer artifacts
+vendor/
+composer.phar
+
+# Build and coverage outputs
+dist/
+build/
+coverage/
+
+# Logs and temp files
+*.log
+*.tmp
+*.cache
+
+# WordPress local/runtime artifacts
+debug.log
+*.sql
+*.sqlite
+
+# Windows Zone Identifier files that can be copied into repos
+*:Zone.Identifier
+
+.github/
