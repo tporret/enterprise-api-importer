@@ -1,0 +1,988 @@
+<?php
+/**
+ * Admin job manager UI and handlers.
+ *
+ * @package EnterpriseAPIImporter
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+exit;
+}
+
+/**
+ * Registers admin menu pages.
+ */
+function eai_add_admin_pages() {
+add_menu_page(
+__( 'Enterprise API Importer', 'enterprise-api-importer' ),
+__( 'EAPI', 'enterprise-api-importer' ),
+'manage_options',
+'eapi-manage',
+'eai_render_manage_imports_page',
+'dashicons-database-import',
+58
+);
+
+add_submenu_page(
+'eapi-manage',
+__( 'Manage Imports', 'enterprise-api-importer' ),
+__( 'Manage Imports', 'enterprise-api-importer' ),
+'manage_options',
+'eapi-manage',
+'eai_render_manage_imports_page'
+);
+
+add_submenu_page(
+'eapi-manage',
+__( 'Schedules', 'enterprise-api-importer' ),
+__( 'Schedules', 'enterprise-api-importer' ),
+'manage_options',
+'eapi-schedules',
+'eai_render_schedules_page'
+);
+}
+add_action( 'admin_menu', 'eai_add_admin_pages' );
+
+/**
+ * Registers admin post handlers.
+ */
+function eai_register_admin_post_handlers() {
+add_action( 'admin_post_eai_save_import', 'eai_handle_save_import' );
+add_action( 'admin_post_eai_delete_import', 'eai_handle_delete_import' );
+add_action( 'admin_post_eai_run_import', 'eai_handle_manual_import_run' );
+add_action( 'admin_post_eai_test_import_endpoint', 'eai_handle_test_import_endpoint' );
+add_action( 'admin_post_eai_schedule_run_now', 'eai_handle_schedule_run_now_action' );
+}
+add_action( 'admin_init', 'eai_register_admin_post_handlers' );
+
+/**
+ * Renders admin notices for this plugin.
+ */
+function eai_render_admin_notices() {
+$notice_code = isset( $_GET['eai_notice'] ) ? sanitize_key( (string) wp_unslash( $_GET['eai_notice'] ) ) : '';
+if ( '' === $notice_code ) {
+return;
+}
+
+$messages = array(
+'import_saved'   => array( 'success', __( 'Import job saved.', 'enterprise-api-importer' ) ),
+'import_deleted' => array( 'success', __( 'Import job deleted.', 'enterprise-api-importer' ) ),
+'import_started' => array( 'success', __( 'Import queued successfully.', 'enterprise-api-importer' ) ),
+'schedule_now'   => array( 'success', __( 'Import scheduled to run now.', 'enterprise-api-importer' ) ),
+'import_error'   => array( 'error', __( 'The import request failed. Please review your inputs and try again.', 'enterprise-api-importer' ) ),
+'schedule_error' => array( 'error', __( 'Unable to schedule this import right now.', 'enterprise-api-importer' ) ),
+);
+
+if ( ! isset( $messages[ $notice_code ] ) ) {
+return;
+}
+
+$type    = $messages[ $notice_code ][0];
+$message = $messages[ $notice_code ][1];
+$class   = 'success' === $type ? 'notice notice-success is-dismissible' : 'notice notice-error';
+
+echo '<div class="' . esc_attr( $class ) . '"><p>' . esc_html( $message ) . '</p></div>';
+}
+
+/**
+ * Renders manage imports page.
+ */
+function eai_render_manage_imports_page() {
+if ( ! current_user_can( 'manage_options' ) ) {
+return;
+}
+
+$action = isset( $_GET['action'] ) ? sanitize_key( (string) wp_unslash( $_GET['action'] ) ) : '';
+
+if ( 'edit' === $action ) {
+eai_render_import_edit_page();
+return;
+}
+
+eai_render_imports_list_page();
+}
+
+/**
+ * Renders list view using WP_List_Table.
+ */
+function eai_render_imports_list_page() {
+$list_table = new EAI_Imports_List_Table();
+$list_table->prepare_items();
+
+$new_url = add_query_arg(
+array(
+'page'   => 'eapi-manage',
+'action' => 'edit',
+),
+admin_url( 'admin.php' )
+);
+
+$active_state   = eai_get_active_run_state();
+?>
+<div class="wrap">
+<h1 class="wp-heading-inline"><?php esc_html_e( 'Manage Imports', 'enterprise-api-importer' ); ?></h1>
+<a href="<?php echo esc_url( $new_url ); ?>" class="page-title-action"><?php esc_html_e( 'Add New', 'enterprise-api-importer' ); ?></a>
+<hr class="wp-header-end" />
+<?php eai_render_admin_notices(); ?>
+
+<?php if ( ! empty( $active_state['run_id'] ) ) : ?>
+<div class="notice notice-info"><p>
+<?php
+echo esc_html(
+sprintf(
+/* translators: 1: run ID, 2: import ID. */
+__( 'Active queue run %1$s for import #%2$d.', 'enterprise-api-importer' ),
+(string) $active_state['run_id'],
+isset( $active_state['import_id'] ) ? (int) $active_state['import_id'] : 0
+)
+);
+?>
+</p></div>
+<?php endif; ?>
+
+<form method="post">
+<?php $list_table->display(); ?>
+</form>
+</div>
+<?php
+}
+
+/**
+ * Builds schedule dashboard metrics for all imports.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function eai_get_dashboard_metrics() {
+global $wpdb;
+
+$imports_table = $wpdb->prefix . 'eapi_imports';
+$logs_table    = $wpdb->prefix . 'custom_import_logs';
+$temp_table    = $wpdb->prefix . 'custom_import_temp';
+
+$rows = $wpdb->get_results(
+"SELECT i.id, i.name, i.endpoint_url, i.recurrence, i.custom_interval_minutes,
+ll.status AS last_status,
+ll.rows_processed,
+ll.rows_created,
+ll.rows_updated,
+ll.errors,
+ll.created_at AS last_run_at
+FROM {$imports_table} i
+LEFT JOIN (
+SELECT l.import_id, l.status, l.rows_processed, l.rows_created, l.rows_updated, l.errors, l.created_at
+FROM {$logs_table} l
+INNER JOIN (
+SELECT import_id, MAX(id) AS max_id
+FROM {$logs_table}
+GROUP BY import_id
+) latest
+ON l.import_id = latest.import_id
+AND l.id = latest.max_id
+) ll
+ON i.id = ll.import_id
+ORDER BY i.name ASC, i.id ASC",
+ARRAY_A
+);
+
+if ( ! is_array( $rows ) ) {
+return array();
+}
+
+$metrics = array();
+$active_state = eai_get_active_run_state();
+
+foreach ( $rows as $row ) {
+$import_id = isset( $row['id'] ) ? absint( $row['id'] ) : 0;
+if ( $import_id <= 0 ) {
+continue;
+}
+
+$pending_count = (int) $wpdb->get_var(
+$wpdb->prepare(
+"SELECT COUNT(id)
+FROM {$temp_table}
+WHERE import_id = %d
+AND is_processed = 0",
+$import_id
+)
+);
+
+$next_scheduled = wp_next_scheduled( 'eai_recurring_import_trigger', array( $import_id, 'recurring' ) );
+if ( false === $next_scheduled ) {
+$next_scheduled = wp_next_scheduled( 'eai_recurring_import_trigger', array( $import_id ) );
+}
+
+$status = 'idle';
+if ( $pending_count > 0 ) {
+$status = 'processing';
+} elseif ( ! empty( $row['last_status'] ) ) {
+$status = strtolower( (string) $row['last_status'] );
+}
+
+$error_count = 0;
+$details_summary = '';
+$trigger_source = 'unknown';
+if ( ! empty( $row['errors'] ) ) {
+$decoded_errors = json_decode( (string) $row['errors'], true );
+if ( is_array( $decoded_errors ) && isset( $decoded_errors['processing_errors'] ) && is_array( $decoded_errors['processing_errors'] ) ) {
+$error_count = count( $decoded_errors['processing_errors'] );
+	if ( ! empty( $decoded_errors['processing_errors'][0] ) ) {
+		$details_summary = sanitize_text_field( (string) $decoded_errors['processing_errors'][0] );
+	}
+	if ( ! empty( $decoded_errors['trigger_source'] ) ) {
+		$trigger_source = sanitize_key( (string) $decoded_errors['trigger_source'] );
+	}
+} elseif ( is_array( $decoded_errors ) && ! empty( $decoded_errors['error'] ) ) {
+$error_count = 1;
+$details_summary = sanitize_text_field( (string) $decoded_errors['error'] );
+	if ( ! empty( $decoded_errors['trigger_source'] ) ) {
+		$trigger_source = sanitize_key( (string) $decoded_errors['trigger_source'] );
+	}
+} else {
+$error_count = 1;
+	$details_summary = sanitize_text_field( (string) $row['errors'] );
+}
+}
+
+if ( 'unknown' === $trigger_source && ! empty( $active_state['import_id'] ) && (int) $active_state['import_id'] === $import_id && ! empty( $active_state['trigger_source'] ) ) {
+$trigger_source = sanitize_key( (string) $active_state['trigger_source'] );
+}
+
+if ( '' === $details_summary ) {
+	if ( 'processing' === $status ) {
+		$details_summary = __( 'Import has staged rows waiting for worker processing.', 'enterprise-api-importer' );
+	} elseif ( ! empty( $row['last_status'] ) ) {
+		$details_summary = sprintf(
+			/* translators: %s is the latest log status. */
+			__( 'Last status: %s', 'enterprise-api-importer' ),
+			sanitize_text_field( (string) $row['last_status'] )
+		);
+	} else {
+		$details_summary = __( 'No execution details available yet.', 'enterprise-api-importer' );
+	}
+}
+
+$metrics[] = array(
+'id'                => $import_id,
+'name'              => isset( $row['name'] ) ? (string) $row['name'] : '',
+'endpoint_url'      => isset( $row['endpoint_url'] ) ? (string) $row['endpoint_url'] : '',
+'status'            => $status,
+'last_status'       => isset( $row['last_status'] ) ? (string) $row['last_status'] : '',
+'last_run_at'       => isset( $row['last_run_at'] ) ? (string) $row['last_run_at'] : '',
+'rows_processed'    => isset( $row['rows_processed'] ) ? (int) $row['rows_processed'] : 0,
+'rows_created'      => isset( $row['rows_created'] ) ? (int) $row['rows_created'] : 0,
+'rows_updated'      => isset( $row['rows_updated'] ) ? (int) $row['rows_updated'] : 0,
+'error_count'       => $error_count,
+'trigger_source'    => $trigger_source,
+'details_summary'   => $details_summary,
+'pending_count'     => $pending_count,
+'next_scheduled_ts' => false !== $next_scheduled ? (int) $next_scheduled : 0,
+'next_scheduled'    => false !== $next_scheduled ? wp_date( 'Y-m-d H:i:s', (int) $next_scheduled ) : __( 'Not scheduled', 'enterprise-api-importer' ),
+);
+}
+
+return $metrics;
+}
+
+/**
+ * Returns status badge class/label.
+ *
+ * @param string $status Status key.
+ *
+ * @return array{class:string,label:string}
+ */
+function eai_get_status_badge_data( $status ) {
+$status = strtolower( (string) $status );
+
+if ( 'processing' === $status ) {
+return array( 'class' => 'eai-badge is-processing', 'label' => __( 'Processing', 'enterprise-api-importer' ) );
+}
+
+if ( 'success' === $status ) {
+return array( 'class' => 'eai-badge is-success', 'label' => __( 'Success', 'enterprise-api-importer' ) );
+}
+
+if ( 'failed' === $status || 'completed_with_errors' === $status ) {
+return array( 'class' => 'eai-badge is-failed', 'label' => __( 'Failed', 'enterprise-api-importer' ) );
+}
+
+return array( 'class' => 'eai-badge is-idle', 'label' => __( 'Idle', 'enterprise-api-importer' ) );
+}
+
+/**
+ * Returns user-facing trigger source label.
+ *
+ * @param string $trigger_source Trigger source key.
+ *
+ * @return string
+ */
+function eai_get_trigger_source_label( $trigger_source ) {
+$trigger_source = sanitize_key( (string) $trigger_source );
+
+if ( 'manual' === $trigger_source ) {
+return __( 'Manual Run', 'enterprise-api-importer' );
+}
+
+if ( 'run_now' === $trigger_source ) {
+return __( 'Run Now', 'enterprise-api-importer' );
+}
+
+if ( 'recurring' === $trigger_source ) {
+return __( 'Recurring Schedule', 'enterprise-api-importer' );
+}
+
+return __( 'Unknown', 'enterprise-api-importer' );
+}
+
+/**
+ * Renders schedules dashboard page.
+ */
+function eai_render_schedules_page() {
+if ( ! current_user_can( 'manage_options' ) ) {
+return;
+}
+
+$metrics = eai_get_dashboard_metrics();
+?>
+<div class="wrap">
+<h1><?php esc_html_e( 'Schedules & Health Dashboard', 'enterprise-api-importer' ); ?></h1>
+<?php eai_render_admin_notices(); ?>
+
+<style>
+.eai-schedules-table .column-status,
+.eai-schedules-table .column-actions {
+white-space: nowrap;
+}
+.eai-badge {
+display: inline-block;
+padding: 4px 10px;
+border-radius: 999px;
+font-size: 12px;
+font-weight: 600;
+}
+.eai-badge.is-success { background: #dcfce7; color: #166534; }
+.eai-badge.is-failed { background: #fee2e2; color: #991b1b; }
+.eai-badge.is-processing { background: #dbeafe; color: #1e40af; }
+.eai-badge.is-idle { background: #e5e7eb; color: #374151; }
+</style>
+
+<table class="widefat striped eai-schedules-table">
+<thead>
+<tr>
+<th><?php esc_html_e( 'Import Name & ID', 'enterprise-api-importer' ); ?></th>
+<th class="column-status"><?php esc_html_e( 'Status', 'enterprise-api-importer' ); ?></th>
+<th><?php esc_html_e( 'Trigger Source', 'enterprise-api-importer' ); ?></th>
+<th><?php esc_html_e( 'Last Run Time', 'enterprise-api-importer' ); ?></th>
+<th><?php esc_html_e( 'Last Run Metrics', 'enterprise-api-importer' ); ?></th>
+<th><?php esc_html_e( 'Details', 'enterprise-api-importer' ); ?></th>
+<th><?php esc_html_e( 'Next Scheduled Run', 'enterprise-api-importer' ); ?></th>
+<th class="column-actions"><?php esc_html_e( 'Actions', 'enterprise-api-importer' ); ?></th>
+</tr>
+</thead>
+<tbody>
+<?php if ( empty( $metrics ) ) : ?>
+<tr><td colspan="8"><?php esc_html_e( 'No import jobs found.', 'enterprise-api-importer' ); ?></td></tr>
+<?php else : ?>
+<?php foreach ( $metrics as $metric ) : ?>
+<?php $badge = eai_get_status_badge_data( isset( $metric['status'] ) ? (string) $metric['status'] : 'idle' ); ?>
+<tr>
+<td>
+<strong><?php echo esc_html( isset( $metric['name'] ) ? (string) $metric['name'] : '' ); ?></strong><br />
+<span><?php echo esc_html( sprintf( __( 'ID: %d', 'enterprise-api-importer' ), isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) ); ?></span>
+</td>
+<td class="column-status"><span class="<?php echo esc_attr( $badge['class'] ); ?>"><?php echo esc_html( $badge['label'] ); ?></span></td>
+<td><?php echo esc_html( eai_get_trigger_source_label( isset( $metric['trigger_source'] ) ? (string) $metric['trigger_source'] : 'unknown' ) ); ?></td>
+<td><?php echo esc_html( ! empty( $metric['last_run_at'] ) ? (string) $metric['last_run_at'] : __( 'Never', 'enterprise-api-importer' ) ); ?></td>
+<td>
+<?php
+echo esc_html(
+sprintf(
+/* translators: 1: rows created, 2: rows updated, 3: error count. */
+__( 'Created: %1$d | Updated: %2$d | Errors: %3$d', 'enterprise-api-importer' ),
+isset( $metric['rows_created'] ) ? (int) $metric['rows_created'] : 0,
+isset( $metric['rows_updated'] ) ? (int) $metric['rows_updated'] : 0,
+isset( $metric['error_count'] ) ? (int) $metric['error_count'] : 0
+)
+);
+?>
+</td>
+<td><?php echo esc_html( isset( $metric['details_summary'] ) ? substr( (string) $metric['details_summary'], 0, 280 ) : '' ); ?></td>
+<td><?php echo esc_html( isset( $metric['next_scheduled'] ) ? (string) $metric['next_scheduled'] : __( 'Not scheduled', 'enterprise-api-importer' ) ); ?></td>
+<td class="column-actions">
+<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+<input type="hidden" name="action" value="eai_schedule_run_now" />
+<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) ( isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) ); ?>" />
+<?php wp_nonce_field( 'eai_schedule_run_now_' . (int) $metric['id'], 'eai_schedule_run_now_nonce' ); ?>
+<?php submit_button( __( 'Run Now', 'enterprise-api-importer' ), 'secondary', 'submit', false ); ?>
+</form>
+</td>
+</tr>
+<?php endforeach; ?>
+<?php endif; ?>
+</tbody>
+</table>
+</div>
+<?php
+}
+
+/**
+ * Renders create/edit import page.
+ */
+function eai_render_import_edit_page() {
+global $wpdb;
+
+$imports_table = $wpdb->prefix . 'eapi_imports';
+$import_id     = isset( $_GET['id'] ) ? absint( wp_unslash( $_GET['id'] ) ) : 0;
+$import_row    = null;
+
+if ( $import_id > 0 ) {
+$import_row = $wpdb->get_row(
+$wpdb->prepare(
+			"SELECT id, name, endpoint_url, auth_token, array_path, unique_id_path, recurrence, custom_interval_minutes, mapping_template, created_at
+FROM {$imports_table}
+WHERE id = %d",
+$import_id
+),
+ARRAY_A
+);
+}
+
+$defaults = array(
+'id'               => 0,
+'name'             => '',
+'endpoint_url'     => '',
+'auth_token'       => '',
+'array_path'       => '',
+		'unique_id_path'   => 'id',
+'recurrence'       => 'off',
+'custom_interval_minutes' => 60,
+'mapping_template' => '',
+);
+$import = is_array( $import_row ) ? wp_parse_args( $import_row, $defaults ) : $defaults;
+$is_edit = (int) $import['id'] > 0;
+?>
+<div class="wrap">
+<h1><?php echo esc_html( $is_edit ? __( 'Edit Import Job', 'enterprise-api-importer' ) : __( 'Create Import Job', 'enterprise-api-importer' ) ); ?></h1>
+<?php eai_render_admin_notices(); ?>
+
+<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+<input type="hidden" name="action" value="eai_save_import" />
+<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) $import['id'] ); ?>" />
+<?php wp_nonce_field( 'eai_save_import', 'eai_save_import_nonce' ); ?>
+
+<table class="form-table" role="presentation">
+<tbody>
+<tr>
+<th scope="row"><label for="eai_import_name"><?php esc_html_e( 'Name', 'enterprise-api-importer' ); ?></label></th>
+<td><input name="name" type="text" id="eai_import_name" class="regular-text" value="<?php echo esc_attr( (string) $import['name'] ); ?>" required /></td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_endpoint_url"><?php esc_html_e( 'Endpoint URL', 'enterprise-api-importer' ); ?></label></th>
+<td><input name="endpoint_url" type="url" id="eai_import_endpoint_url" class="large-text" value="<?php echo esc_attr( (string) $import['endpoint_url'] ); ?>" required /></td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_auth_token"><?php esc_html_e( 'Bearer Token', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_token" type="password" id="eai_import_auth_token" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_token'] ); ?>" autocomplete="new-password" />
+<p class="description"><?php esc_html_e( 'Leave blank only if your endpoint does not require bearer authentication.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_array_path"><?php esc_html_e( 'JSON Array Path', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="array_path" type="text" id="eai_import_array_path" class="regular-text" value="<?php echo esc_attr( (string) $import['array_path'] ); ?>" />
+<p class="description"><?php esc_html_e( 'Example: data.employees. Leave empty if the API root is already an array.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_unique_id_path"><?php esc_html_e( 'Unique ID Path', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="unique_id_path" type="text" id="eai_import_unique_id_path" class="regular-text" value="<?php echo esc_attr( (string) $import['unique_id_path'] ); ?>" />
+<p class="description"><?php esc_html_e( 'Dot-path to the source unique identifier (example: CourseIDFull or data.course.id). Defaults to id when empty.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_recurrence"><?php esc_html_e( 'Recurrence', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<select name="recurrence" id="eai_import_recurrence">
+<option value="off" <?php selected( (string) $import['recurrence'], 'off' ); ?>><?php esc_html_e( 'Off', 'enterprise-api-importer' ); ?></option>
+<option value="hourly" <?php selected( (string) $import['recurrence'], 'hourly' ); ?>><?php esc_html_e( 'Hourly', 'enterprise-api-importer' ); ?></option>
+<option value="twicedaily" <?php selected( (string) $import['recurrence'], 'twicedaily' ); ?>><?php esc_html_e( 'Twice Daily', 'enterprise-api-importer' ); ?></option>
+<option value="daily" <?php selected( (string) $import['recurrence'], 'daily' ); ?>><?php esc_html_e( 'Daily', 'enterprise-api-importer' ); ?></option>
+<option value="custom" <?php selected( (string) $import['recurrence'], 'custom' ); ?>><?php esc_html_e( 'Custom', 'enterprise-api-importer' ); ?></option>
+</select>
+<label for="eai_import_custom_interval_minutes" style="margin-left:10px;"><?php esc_html_e( 'Custom minutes', 'enterprise-api-importer' ); ?></label>
+<input name="custom_interval_minutes" type="number" id="eai_import_custom_interval_minutes" min="1" step="1" class="small-text" value="<?php echo esc_attr( (string) $import['custom_interval_minutes'] ); ?>" />
+<p class="description"><?php esc_html_e( 'When set to Custom, the import runs every N minutes. Use Off to disable recurring automation.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_mapping_template"><?php esc_html_e( 'Mapping Template', 'enterprise-api-importer' ); ?></label></th>
+<td><textarea name="mapping_template" id="eai_import_mapping_template" rows="12" class="large-text code" required><?php echo esc_textarea( (string) $import['mapping_template'] ); ?></textarea></td>
+</tr>
+</tbody>
+</table>
+
+<?php submit_button( $is_edit ? __( 'Update Import', 'enterprise-api-importer' ) : __( 'Create Import', 'enterprise-api-importer' ) ); ?>
+</form>
+
+<?php if ( $is_edit ) : ?>
+<hr />
+<h2><?php esc_html_e( 'Run This Import', 'enterprise-api-importer' ); ?></h2>
+<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+<input type="hidden" name="action" value="eai_run_import" />
+<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) $import['id'] ); ?>" />
+<?php wp_nonce_field( 'eai_manual_run', 'eai_manual_run_nonce' ); ?>
+<?php submit_button( __( 'Run Import Now', 'enterprise-api-importer' ), 'secondary' ); ?>
+</form>
+
+<?php
+$test_result_key = 'eai_endpoint_test_result_' . (int) $import['id'];
+$test_result = get_transient( $test_result_key );
+if ( false !== $test_result ) {
+delete_transient( $test_result_key );
+}
+?>
+
+<hr />
+<div class="eai-panel">
+<style>
+.eai-panel { margin-top: 18px; padding: 18px 20px; border: 1px solid #dcdcde; border-radius: 10px; background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); box-shadow: 0 1px 0 rgba(0,0,0,0.03); }
+.eai-panel h2 { margin-top: 0; }
+.eai-metrics { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 14px; }
+.eai-chip { display: inline-block; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #eef2ff; color: #1e3a8a; }
+.eai-chip.is-error { background: #fef2f2; color: #991b1b; }
+.eai-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.eai-stat { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; background: #fff; }
+.eai-stat-label { display: block; font-size: 11px; color: #475569; text-transform: uppercase; letter-spacing: 0.03em; }
+.eai-stat-value { display: block; font-size: 15px; font-weight: 600; margin-top: 2px; }
+.eai-preview { border: 1px solid #cbd5e1; border-radius: 8px; background: #0f172a; color: #e2e8f0; padding: 12px; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.5; }
+.eai-record { border: 1px solid #dbe3ec; border-radius: 10px; padding: 12px; background: #fff; margin-bottom: 12px; }
+.eai-record h4 { margin: 0 0 8px; }
+.eai-mapped-render { border: 1px dashed #cbd5e1; border-radius: 8px; padding: 10px; background: #f8fafc; max-height: 220px; overflow: auto; }
+.eai-mode-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+</style>
+
+<h2><?php esc_html_e( 'Endpoint Test & Preview', 'enterprise-api-importer' ); ?></h2>
+<p><?php esc_html_e( 'Validate connectivity and inspect sample response data before running an import.', 'enterprise-api-importer' ); ?></p>
+<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+<input type="hidden" name="action" value="eai_test_import_endpoint" />
+<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) $import['id'] ); ?>" />
+<?php wp_nonce_field( 'eai_test_import_endpoint', 'eai_test_import_endpoint_nonce' ); ?>
+
+<div class="eai-mode-row">
+<label><input type="radio" name="eai_preview_mode" value="structure" checked="checked" /> <?php esc_html_e( 'Structure Preview', 'enterprise-api-importer' ); ?></label>
+<label><input type="radio" name="eai_preview_mode" value="mapping" /> <?php esc_html_e( 'Normalized + Mapping Preview (first 3 records)', 'enterprise-api-importer' ); ?></label>
+</div>
+
+<?php submit_button( __( 'Test Endpoint', 'enterprise-api-importer' ), 'primary', 'submit', false ); ?>
+</form>
+
+<?php if ( is_array( $test_result ) && ! empty( $test_result ) ) : ?>
+<div class="eai-metrics">
+<span class="eai-chip <?php echo ( isset( $test_result['type'] ) && 'error' === $test_result['type'] ) ? 'is-error' : ''; ?>"><?php echo esc_html( isset( $test_result['type'] ) && 'error' === $test_result['type'] ? __( 'Test Failed', 'enterprise-api-importer' ) : __( 'Test Passed', 'enterprise-api-importer' ) ); ?></span>
+<span class="eai-chip"><?php echo esc_html( ! empty( $test_result['used_cache'] ) ? __( 'Source: Cached Response', 'enterprise-api-importer' ) : __( 'Source: Live API Call', 'enterprise-api-importer' ) ); ?></span>
+</div>
+<p><strong><?php esc_html_e( 'Message:', 'enterprise-api-importer' ); ?></strong> <?php echo esc_html( isset( $test_result['message'] ) ? (string) $test_result['message'] : '' ); ?></p>
+
+<div class="eai-grid">
+<div class="eai-stat">
+<span class="eai-stat-label"><?php esc_html_e( 'HTTP Code', 'enterprise-api-importer' ); ?></span>
+<span class="eai-stat-value"><?php echo esc_html( isset( $test_result['http_code'] ) ? (string) $test_result['http_code'] : 'n/a' ); ?></span>
+</div>
+<div class="eai-stat">
+<span class="eai-stat-label"><?php esc_html_e( 'Payload Type', 'enterprise-api-importer' ); ?></span>
+<span class="eai-stat-value"><?php echo esc_html( isset( $test_result['payload_type'] ) ? (string) $test_result['payload_type'] : 'unknown' ); ?></span>
+</div>
+<div class="eai-stat">
+<span class="eai-stat-label"><?php esc_html_e( 'Items Found', 'enterprise-api-importer' ); ?></span>
+<span class="eai-stat-value"><?php echo esc_html( isset( $test_result['item_count'] ) ? (string) $test_result['item_count'] : '0' ); ?></span>
+</div>
+<div class="eai-stat">
+<span class="eai-stat-label"><?php esc_html_e( 'JSON Path Used', 'enterprise-api-importer' ); ?></span>
+<span class="eai-stat-value"><?php echo esc_html( isset( $test_result['json_path'] ) && '' !== (string) $test_result['json_path'] ? (string) $test_result['json_path'] : 'root' ); ?></span>
+</div>
+</div>
+
+<?php if ( ! empty( $test_result['sample_keys'] ) && is_array( $test_result['sample_keys'] ) ) : ?>
+<p><strong><?php esc_html_e( 'Sample Item Keys:', 'enterprise-api-importer' ); ?></strong> <?php echo esc_html( implode( ', ', array_slice( $test_result['sample_keys'], 0, 25 ) ) ); ?></p>
+<?php endif; ?>
+
+<?php if ( isset( $test_result['sample_json'] ) && '' !== (string) $test_result['sample_json'] ) : ?>
+<p><strong><?php esc_html_e( 'Sample Preview', 'enterprise-api-importer' ); ?></strong></p>
+<pre class="eai-preview"><?php echo esc_html( (string) $test_result['sample_json'] ); ?></pre>
+<?php endif; ?>
+
+<?php if ( isset( $test_result['preview_mode'] ) && 'mapping' === (string) $test_result['preview_mode'] ) : ?>
+<h3><?php esc_html_e( 'Normalized + Mapping Preview', 'enterprise-api-importer' ); ?></h3>
+<?php if ( ! empty( $test_result['normalized_preview'] ) && is_array( $test_result['normalized_preview'] ) ) : ?>
+<?php foreach ( $test_result['normalized_preview'] as $preview_row ) : ?>
+<div class="eai-record">
+<h4><?php echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $preview_row['record_number'] ) ? (int) $preview_row['record_number'] : 0 ) ); ?></h4>
+<?php if ( ! empty( $preview_row['mapping_error'] ) ) : ?>
+<p><strong><?php esc_html_e( 'Mapping Error:', 'enterprise-api-importer' ); ?></strong> <?php echo esc_html( (string) $preview_row['mapping_error'] ); ?></p>
+<?php else : ?>
+<p><strong><?php esc_html_e( 'Mapped Content (Rendered Safely):', 'enterprise-api-importer' ); ?></strong></p>
+<div class="eai-mapped-render"><?php echo wp_kses_post( isset( $preview_row['mapped_content'] ) ? (string) $preview_row['mapped_content'] : '' ); ?></div>
+<?php endif; ?>
+</div>
+<?php endforeach; ?>
+<?php else : ?>
+<p><?php esc_html_e( 'No normalized records were available for mapping preview.', 'enterprise-api-importer' ); ?></p>
+<?php endif; ?>
+<?php endif; ?>
+<?php endif; ?>
+</div>
+<?php endif; ?>
+</div>
+<?php
+}
+
+/**
+ * Handles create/update import form submits.
+ */
+function eai_handle_save_import() {
+global $wpdb;
+
+if ( ! current_user_can( 'manage_options' ) ) {
+wp_die( esc_html__( 'You are not allowed to manage imports.', 'enterprise-api-importer' ) );
+}
+
+check_admin_referer( 'eai_save_import', 'eai_save_import_nonce' );
+
+$imports_table = $wpdb->prefix . 'eapi_imports';
+$import_id     = isset( $_POST['import_id'] ) ? absint( wp_unslash( $_POST['import_id'] ) ) : 0;
+
+$name         = isset( $_POST['name'] ) ? sanitize_text_field( wp_unslash( $_POST['name'] ) ) : '';
+$endpoint_url = isset( $_POST['endpoint_url'] ) ? esc_url_raw( trim( (string) wp_unslash( $_POST['endpoint_url'] ) ) ) : '';
+$auth_token   = isset( $_POST['auth_token'] ) ? sanitize_text_field( wp_unslash( $_POST['auth_token'] ) ) : '';
+$array_path   = isset( $_POST['array_path'] ) ? sanitize_text_field( wp_unslash( $_POST['array_path'] ) ) : '';
+	$unique_id_path = isset( $_POST['unique_id_path'] ) ? sanitize_text_field( wp_unslash( $_POST['unique_id_path'] ) ) : 'id';
+$recurrence   = isset( $_POST['recurrence'] ) ? sanitize_key( (string) wp_unslash( $_POST['recurrence'] ) ) : 'off';
+$custom_interval_minutes = isset( $_POST['custom_interval_minutes'] ) ? absint( wp_unslash( $_POST['custom_interval_minutes'] ) ) : 0;
+$template_raw = isset( $_POST['mapping_template'] ) ? wp_unslash( $_POST['mapping_template'] ) : '';
+	$unique_id_path = trim( (string) $unique_id_path );
+
+$allowed_recurrence = array( 'off', 'hourly', 'twicedaily', 'daily', 'custom' );
+if ( ! in_array( $recurrence, $allowed_recurrence, true ) ) {
+$recurrence = 'off';
+}
+
+if ( 'custom' === $recurrence ) {
+$custom_interval_minutes = max( 1, $custom_interval_minutes );
+} else {
+$custom_interval_minutes = 0;
+}
+
+	if ( '' === $unique_id_path ) {
+		$unique_id_path = 'id';
+	}
+
+$allowed_mapping_html = array(
+'h1'     => array(),
+'h2'     => array(),
+'h3'     => array(),
+'h4'     => array(),
+'h5'     => array(),
+'h6'     => array(),
+'p'      => array(),
+'br'     => array(),
+'strong' => array(),
+'em'     => array(),
+'ul'     => array(),
+'ol'     => array(),
+'li'     => array(),
+'a'      => array( 'href' => true, 'title' => true, 'target' => true, 'rel' => true ),
+);
+$mapping_template = wp_kses( (string) $template_raw, $allowed_mapping_html );
+
+if ( '' === $name || '' === $endpoint_url || '' === $mapping_template ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$data = array(
+'name'             => $name,
+'endpoint_url'     => $endpoint_url,
+'auth_token'       => $auth_token,
+'array_path'       => $array_path,
+		'unique_id_path'   => $unique_id_path,
+'recurrence'       => $recurrence,
+'custom_interval_minutes' => $custom_interval_minutes,
+'mapping_template' => $mapping_template,
+);
+	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s' );
+
+if ( $import_id > 0 ) {
+$updated = $wpdb->update( $imports_table, $data, array( 'id' => $import_id ), $formats, array( '%d' ) );
+if ( false === $updated ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+} else {
+$inserted = $wpdb->insert( $imports_table, array_merge( $data, array( 'created_at' => current_time( 'mysql', true ) ) ), array_merge( $formats, array( '%s' ) ) );
+if ( false === $inserted ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+$import_id = (int) $wpdb->insert_id;
+}
+
+$schedule_synced = eai_sync_import_recurrence_schedule( $import_id, $recurrence, $custom_interval_minutes );
+if ( ! $schedule_synced ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_saved' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+/**
+ * Handles delete import action.
+ */
+function eai_handle_delete_import() {
+global $wpdb;
+
+if ( ! current_user_can( 'manage_options' ) ) {
+wp_die( esc_html__( 'You are not allowed to manage imports.', 'enterprise-api-importer' ) );
+}
+
+$import_id = isset( $_GET['import_id'] ) ? absint( wp_unslash( $_GET['import_id'] ) ) : 0;
+if ( $import_id <= 0 ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+check_admin_referer( 'eai_delete_import_' . $import_id, 'eai_delete_nonce' );
+
+eai_clear_import_scheduled_hooks( $import_id );
+
+$imports_table = $wpdb->prefix . 'eapi_imports';
+$deleted       = $wpdb->delete( $imports_table, array( 'id' => $import_id ), array( '%d' ) );
+
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'eai_notice' => false === $deleted ? 'import_error' : 'import_deleted' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+/**
+ * Handles manual import execution for a specific import job.
+ */
+function eai_handle_manual_import_run() {
+if ( ! current_user_can( 'manage_options' ) ) {
+wp_die( esc_html__( 'You are not allowed to run imports.', 'enterprise-api-importer' ) );
+}
+
+check_admin_referer( 'eai_manual_run', 'eai_manual_run_nonce' );
+
+$import_id = isset( $_POST['import_id'] ) ? absint( wp_unslash( $_POST['import_id'] ) ) : 0;
+if ( $import_id <= 0 ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$active_state = eai_get_active_run_state();
+if ( ! empty( $active_state['run_id'] ) ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$extract_result = eai_extract_and_stage_data( $import_id );
+if ( is_wp_error( $extract_result ) ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+eai_set_active_run_state(
+array(
+'run_id'               => wp_generate_uuid4(),
+'import_id'            => $import_id,
+'trigger_source'       => 'manual',
+'start_timestamp'      => time(),
+'start_time'           => gmdate( 'Y-m-d H:i:s', time() ),
+'rows_processed'       => 0,
+'rows_created'         => 0,
+'rows_updated'         => 0,
+'temp_rows_found'      => 0,
+'temp_rows_processed'  => 0,
+'errors'               => array(),
+'slices'               => 0,
+)
+);
+
+$scheduled = eai_schedule_import_batch_event( null, true );
+if ( ! $scheduled ) {
+eai_clear_active_run_state();
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_started' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+/**
+ * Handles endpoint test and payload preview for a specific import job.
+ */
+function eai_handle_test_import_endpoint() {
+global $wpdb;
+
+if ( ! current_user_can( 'manage_options' ) ) {
+wp_die( esc_html__( 'You are not allowed to test endpoints.', 'enterprise-api-importer' ) );
+}
+
+check_admin_referer( 'eai_test_import_endpoint', 'eai_test_import_endpoint_nonce' );
+
+$import_id = isset( $_POST['import_id'] ) ? absint( wp_unslash( $_POST['import_id'] ) ) : 0;
+if ( $import_id <= 0 ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$preview_mode = isset( $_POST['eai_preview_mode'] ) ? sanitize_key( (string) wp_unslash( $_POST['eai_preview_mode'] ) ) : 'structure';
+if ( 'mapping' !== $preview_mode ) {
+$preview_mode = 'structure';
+}
+
+$imports_table = $wpdb->prefix . 'eapi_imports';
+$import_job = $wpdb->get_row(
+$wpdb->prepare(
+"SELECT id, endpoint_url, auth_token, array_path, mapping_template
+FROM {$imports_table}
+WHERE id = %d",
+$import_id
+),
+ARRAY_A
+);
+
+$result_key = 'eai_endpoint_test_result_' . $import_id;
+$preview_result = array(
+'type'         => 'error',
+'message'      => __( 'Endpoint test failed.', 'enterprise-api-importer' ),
+'http_code'    => 0,
+'used_cache'   => false,
+'json_path'    => '',
+'preview_mode' => $preview_mode,
+);
+
+if ( ! is_array( $import_job ) ) {
+$preview_result['message'] = __( 'Import job could not be found.', 'enterprise-api-importer' );
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$endpoint = trim( (string) $import_job['endpoint_url'] );
+$token    = trim( (string) $import_job['auth_token'] );
+$json_path = trim( (string) $import_job['array_path'] );
+
+if ( '' === $endpoint ) {
+$preview_result['message'] = __( 'No endpoint URL available to test.', 'enterprise-api-importer' );
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$response = eai_fetch_api_payload( $endpoint, $token, true );
+if ( is_wp_error( $response ) ) {
+$preview_result['message'] = $response->get_error_message();
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$decoded_json = json_decode( (string) $response['body'], true );
+if ( JSON_ERROR_NONE !== json_last_error() ) {
+$preview_result['message'] = sprintf( __( 'Endpoint responded but JSON decode failed: %s', 'enterprise-api-importer' ), json_last_error_msg() );
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$selected_payload = '' === $json_path ? $decoded_json : eai_resolve_json_array_path( $decoded_json, $json_path );
+if ( is_wp_error( $selected_payload ) ) {
+$preview_result['message'] = $selected_payload->get_error_message();
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$sample_item = null;
+if ( is_array( $selected_payload ) ) {
+$sample_item = eai_array_is_list( $selected_payload ) && ! empty( $selected_payload ) ? $selected_payload[0] : $selected_payload;
+}
+
+$sample_json = wp_json_encode( $sample_item, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+if ( false === $sample_json ) {
+$sample_json = '';
+}
+
+$normalized_preview = array();
+if ( 'mapping' === $preview_mode && is_array( $selected_payload ) ) {
+$normalized_items = eai_normalize_staged_items( $selected_payload );
+$preview_items = array_slice( $normalized_items, 0, 3 );
+$record_number = 0;
+foreach ( $preview_items as $preview_item ) {
+++$record_number;
+$mapped_content = eai_render_mapping_template_for_item( $preview_item, (string) $import_job['mapping_template'] );
+$mapping_error = '';
+if ( is_wp_error( $mapped_content ) ) {
+$mapping_error = $mapped_content->get_error_message();
+$mapped_content = '';
+}
+$normalized_preview[] = array(
+'record_number' => $record_number,
+'mapping_error' => $mapping_error,
+'mapped_content' => substr( (string) $mapped_content, 0, 5000 ),
+);
+}
+}
+
+$preview_result = array(
+'type'         => 'success',
+'message'      => __( 'Endpoint test passed and payload preview generated.', 'enterprise-api-importer' ),
+'http_code'    => isset( $response['status_code'] ) ? (int) $response['status_code'] : 0,
+'used_cache'   => ! empty( $response['used_cache'] ),
+'json_path'    => $json_path,
+'payload_type' => gettype( $selected_payload ),
+'item_count'   => is_array( $selected_payload ) ? count( $selected_payload ) : 0,
+'sample_keys'  => is_array( $sample_item ) ? array_keys( $sample_item ) : array(),
+'sample_json'  => substr( (string) $sample_json, 0, 6000 ),
+'preview_mode' => $preview_mode,
+'normalized_preview' => $normalized_preview,
+);
+
+set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+/**
+ * Handles scheduling an immediate cron run for one import.
+ */
+function eai_handle_schedule_run_now_action() {
+if ( ! current_user_can( 'manage_options' ) ) {
+wp_die( esc_html__( 'You are not allowed to schedule imports.', 'enterprise-api-importer' ) );
+}
+
+$import_id = isset( $_POST['import_id'] ) ? absint( wp_unslash( $_POST['import_id'] ) ) : 0;
+if ( $import_id <= 0 ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-schedules', 'eai_notice' => 'schedule_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+check_admin_referer( 'eai_schedule_run_now_' . $import_id, 'eai_schedule_run_now_nonce' );
+
+$scheduled = wp_schedule_single_event( time(), 'ncsu_api_importer_batch_hook', array( $import_id, 'run_now' ) );
+
+wp_safe_redirect(
+add_query_arg(
+array(
+'page'       => 'eapi-schedules',
+'eai_notice' => $scheduled ? 'schedule_now' : 'schedule_error',
+),
+admin_url( 'admin.php' )
+)
+);
+exit;
+}

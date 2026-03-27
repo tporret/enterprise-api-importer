@@ -1,0 +1,24 @@
+<?php
+/**
+ * Plugin Name: Enterprise API Importer
+ * Plugin URI:  https://github.com/enterprise-api-importer
+ * Description: Highly secure enterprise ETL importer for WordPress.
+ * Version:     0.1.0
+ * Author:      tporret
+ * License:     GPL-2.0-or-later
+ * Text Domain: enterprise-api-importer
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+// Load plugin modules in dependency order.
+require_once __DIR__ . '/includes/core.php';
+require_once __DIR__ . '/includes/class-eapi-imports-list-table.php';
+require_once __DIR__ . '/includes/content.php';
+require_once __DIR__ . '/includes/import.php';
+require_once __DIR__ . '/includes/admin.php';
+
+register_activation_hook( __FILE__, 'eai_activate_plugin' );
+add_action( 'plugins_loaded', 'eai_maybe_upgrade_schema' );
