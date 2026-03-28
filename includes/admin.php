@@ -157,8 +157,8 @@ isset( $active_state['import_id'] ) ? (int) $active_state['import_id'] : 0
 	<?php
 	echo esc_html(
 		sprintf(
-			/* translators: %d is total number of imported posts that have _eai_import_id. */
-			__( 'Total imported posts with _eai_import_id: %d', 'enterprise-api-importer' ),
+			/* translators: %d is total number of imported posts linked to any import job via _eai_import_id meta. */
+			__( 'Total imported posts linked to import jobs (_eai_import_id): %d', 'enterprise-api-importer' ),
 			(int) $total_owned_posts
 		)
 	);
@@ -306,8 +306,12 @@ $status = strtolower( (string) $latest_logs[ $import_id ]['status'] );
 $error_count = 0;
 $details_summary = '';
 $trigger_source = 'unknown';
+$rows_trashed = 0;
 if ( ! empty( $latest_logs[ $import_id ]['errors'] ) ) {
 $decoded_errors = json_decode( (string) $latest_logs[ $import_id ]['errors'], true );
+if ( is_array( $decoded_errors ) && isset( $decoded_errors['orphans_trashed'] ) ) {
+	$rows_trashed = absint( $decoded_errors['orphans_trashed'] );
+}
 if ( is_array( $decoded_errors ) && isset( $decoded_errors['processing_errors'] ) && is_array( $decoded_errors['processing_errors'] ) ) {
 $error_count = count( $decoded_errors['processing_errors'] );
 	if ( ! empty( $decoded_errors['processing_errors'][0] ) ) {
@@ -356,6 +360,7 @@ $metrics[] = array(
 'rows_processed'    => isset( $latest_logs[ $import_id ]['rows_processed'] ) ? (int) $latest_logs[ $import_id ]['rows_processed'] : 0,
 'rows_created'      => isset( $latest_logs[ $import_id ]['rows_created'] ) ? (int) $latest_logs[ $import_id ]['rows_created'] : 0,
 'rows_updated'      => isset( $latest_logs[ $import_id ]['rows_updated'] ) ? (int) $latest_logs[ $import_id ]['rows_updated'] : 0,
+'rows_trashed'      => $rows_trashed,
 'error_count'       => $error_count,
 'trigger_source'    => $trigger_source,
 'details_summary'   => $details_summary,
@@ -484,10 +489,11 @@ echo esc_html( sprintf( __( 'ID: %d', 'enterprise-api-importer' ), isset( $metri
 <?php
 echo esc_html(
 sprintf(
-/* translators: 1: rows created, 2: rows updated, 3: error count. */
-__( 'Created: %1$d | Updated: %2$d | Errors: %3$d', 'enterprise-api-importer' ),
+	/* translators: 1: rows created, 2: rows updated, 3: rows trashed, 4: error count. */
+	__( 'Created: %1$d | Updated: %2$d | Trashed: %3$d | Errors: %4$d', 'enterprise-api-importer' ),
 isset( $metric['rows_created'] ) ? (int) $metric['rows_created'] : 0,
 isset( $metric['rows_updated'] ) ? (int) $metric['rows_updated'] : 0,
+	isset( $metric['rows_trashed'] ) ? (int) $metric['rows_trashed'] : 0,
 isset( $metric['error_count'] ) ? (int) $metric['error_count'] : 0
 )
 );
