@@ -80,7 +80,22 @@ function eai_activate_plugin() {
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
 
+	if ( false === wp_next_scheduled( 'eapi_daily_garbage_collection' ) ) {
+		wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'eapi_daily_garbage_collection' );
+	}
+
 	update_option( 'eai_db_schema_version', EAI_DB_SCHEMA_VERSION );
+}
+
+/**
+ * Runs on plugin deactivation.
+ *
+ * Clears plugin-owned scheduled cron events.
+ *
+ * @return void
+ */
+function eai_deactivate_plugin() {
+	wp_clear_scheduled_hook( 'eapi_daily_garbage_collection' );
 }
 
 /**

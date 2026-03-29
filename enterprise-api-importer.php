@@ -29,4 +29,5 @@ require_once __DIR__ . '/includes/import.php';
 require_once __DIR__ . '/includes/admin.php';
 
 register_activation_hook( __FILE__, 'eai_activate_plugin' );
+register_deactivation_hook( __FILE__, 'eai_deactivate_plugin' );
 add_action( 'plugins_loaded', 'eai_maybe_upgrade_schema' );
