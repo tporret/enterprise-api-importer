@@ -224,6 +224,83 @@ class EAI_Import_Processor {
 	}
 
 	/**
+	 * Runs daily garbage collection for import temp and log tables using chunked deletions.
+	 *
+	 * Chunking with LIMIT reduces lock duration and helps avoid large-table lock contention.
+	 *
+	 * @return array<string, mixed> Summary including deleted row counts and any query errors.
+	 */
+	public static function run_garbage_collection() {
+		global $wpdb;
+
+		if ( ! $wpdb instanceof wpdb ) {
+			return array(
+				'temp_deleted' => 0,
+				'logs_deleted' => 0,
+				'errors'       => array( 'Database connection is unavailable.' ),
+			);
+		}
+
+		$temp_table = $wpdb->prefix . 'custom_import_temp';
+		$logs_table = $wpdb->prefix . 'custom_import_logs';
+		$chunk_size = 1000;
+
+		$temp_deleted_total = 0;
+		$logs_deleted_total = 0;
+		$errors             = array();
+
+		$delete_temp_sql = $wpdb->prepare(
+			"DELETE FROM {$temp_table} WHERE is_processed = 1 OR created_at < ( UTC_TIMESTAMP() - INTERVAL 7 DAY ) LIMIT %d",
+			$chunk_size
+		);
+
+		if ( is_string( $delete_temp_sql ) && '' !== $delete_temp_sql ) {
+			do {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$temp_result  = $wpdb->query( $delete_temp_sql );
+				$temp_deleted = max( 0, (int) $wpdb->rows_affected );
+
+				if ( false === $temp_result ) {
+					$errors[] = 'Failed to purge records from custom_import_temp.';
+					break;
+				}
+
+				$temp_deleted_total += $temp_deleted;
+			} while ( $temp_deleted > 0 );
+		} else {
+			$errors[] = 'Failed to prepare temp-table purge query.';
+		}
+
+		$delete_logs_sql = $wpdb->prepare(
+			"DELETE FROM {$logs_table} WHERE created_at < ( UTC_TIMESTAMP() - INTERVAL 30 DAY ) LIMIT %d",
+			$chunk_size
+		);
+
+		if ( is_string( $delete_logs_sql ) && '' !== $delete_logs_sql ) {
+			do {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$logs_result  = $wpdb->query( $delete_logs_sql );
+				$logs_deleted = max( 0, (int) $wpdb->rows_affected );
+
+				if ( false === $logs_result ) {
+					$errors[] = 'Failed to purge records from custom_import_logs.';
+					break;
+				}
+
+				$logs_deleted_total += $logs_deleted;
+			} while ( $logs_deleted > 0 );
+		} else {
+			$errors[] = 'Failed to prepare logs-table purge query.';
+		}
+
+		return array(
+			'temp_deleted' => $temp_deleted_total,
+			'logs_deleted' => $logs_deleted_total,
+			'errors'       => $errors,
+		);
+	}
+
+	/**
 	 * Writes a media-processing error row to the import logs table.
 	 *
 	 * @param string $status    Log status label.
@@ -261,7 +338,53 @@ class EAI_Import_Processor {
 add_action( 'eai_process_import_queue', 'eai_handle_scheduled_import_batch' );
 add_action( 'ncsu_api_importer_batch_hook', 'eai_handle_import_batch_hook', 10, 2 );
 add_action( 'eai_recurring_import_trigger', 'eai_handle_import_batch_hook', 10, 2 );
+add_action( 'eapi_daily_garbage_collection', array( 'EAI_Import_Processor', 'run_garbage_collection' ) );
 add_filter( 'cron_schedules', 'eai_register_custom_cron_schedules' );
+
+if ( defined( 'WP_CLI' ) && WP_CLI ) {
+	WP_CLI::add_command( 'eai garbage-collect', 'eai_wp_cli_run_garbage_collection' );
+}
+
+/**
+ * Runs Enterprise API Importer garbage collection from WP-CLI.
+ *
+ * ## EXAMPLES
+ *
+ *     wp eai garbage-collect
+ *
+ * @param array<int, string>          $args       Positional WP-CLI args.
+ * @param array<string, string|bool>  $assoc_args Associative WP-CLI args.
+ *
+ * @return void
+ */
+function eai_wp_cli_run_garbage_collection( $args, $assoc_args ) {
+	unset( $args, $assoc_args );
+
+	$results = EAI_Import_Processor::run_garbage_collection();
+
+	if ( ! is_array( $results ) ) {
+		WP_CLI::error( 'Garbage collection failed: invalid response payload.' );
+	}
+
+	$temp_deleted = isset( $results['temp_deleted'] ) ? absint( $results['temp_deleted'] ) : 0;
+	$logs_deleted = isset( $results['logs_deleted'] ) ? absint( $results['logs_deleted'] ) : 0;
+	$errors       = isset( $results['errors'] ) && is_array( $results['errors'] ) ? $results['errors'] : array();
+
+	WP_CLI::log( sprintf( 'Temp rows deleted: %d', $temp_deleted ) );
+	WP_CLI::log( sprintf( 'Log rows deleted: %d', $logs_deleted ) );
+
+	if ( ! empty( $errors ) ) {
+		foreach ( $errors as $error_message ) {
+			if ( is_scalar( $error_message ) ) {
+				WP_CLI::warning( (string) $error_message );
+			}
+		}
+
+		WP_CLI::error( 'Garbage collection completed with errors.' );
+	}
+
+	WP_CLI::success( 'Garbage collection completed successfully.' );
+}
 
 /**
  * Registers custom recurrence schedules used by import jobs.
