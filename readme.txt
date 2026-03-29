@@ -1,58 +1,48 @@
 === Enterprise API Importer ===
 Contributors: tporret
-Tags: import, api, etl, cron, automation
-Requires at least: 6.4
-Tested up to: 6.9
-Requires PHP: 7.4
-Stable tag: 0.1.0
-License: GPL-2.0-or-later
+Tags: api, import, etl, json, cron, twig
+Requires at least: 6.0
+Tested up to: 6.4
+Requires PHP: 8.1
+Stable tag: 1.0.0
+License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Highly secure enterprise ETL importer for WordPress with staged processing and recurring schedules.
+Enterprise ETL importer for WordPress that connects APIs, filters JSON payloads, and maps nested data using Twig and scheduled batches.
 
 == Description ==
-Enterprise API Importer runs structured API-to-WordPress ETL jobs.
+Enterprise API Importer is a powerful, enterprise-grade ETL pipeline for WordPress teams that need reliability, control, and visibility when importing external API data at scale.
 
-It supports:
-- Multiple import connections
-- JSON array-path extraction
-- Rule-based data filtering (Key/Operator/Value, AND logic) before staging
-- Twig template-based mapping into imported_item posts (loops, conditionals, nested data)
-- Per-import recurrence (off, hourly, twicedaily, daily, custom minutes)
-- Queue-based processing for safer long runs
-- Schedules and health dashboard
+With Enterprise API Importer, you can orchestrate clean, repeatable import workflows without sacrificing flexibility:
 
-Transform templates are stored in the import configuration table and rendered as strings through Twig ArrayLoader.
-The transform context exposes the record payload as record, item, and data.
-Auto-escaping is disabled so intended HTML is preserved in post_content.
-Malformed templates are caught and logged with status Template Syntax Error, and the batch safely continues.
+- Multi-Connection Job Manager
+- Advanced JSON array traversing and data filtering to discard noise before database insertion
+- Twig Templating Engine for complex logic, loops, and nested object mapping without clunky drag-and-drop builders
+- Time-Aware Batch Processing via WP-Cron to help prevent server timeouts and memory exhaustion
+- Single-pane-of-glass Health and Schedules Dashboard for operational visibility
+
+Whether you are importing product catalogs, records, listings, or custom business data, Enterprise API Importer gives technical teams a scalable framework for structured API-to-WordPress ETL.
 
 == Installation ==
-1. Upload the plugin folder to /wp-content/plugins/.
-2. In the plugin root, install Twig with Composer: composer require twig/twig
-3. Activate the plugin through the Plugins menu in WordPress.
-4. Go to EAPI -> Manage Imports to create your first import.
+1. Upload the plugin folder to the /wp-content/plugins/ directory, or install it through the WordPress Plugins screen.
+2. Activate the plugin through the Plugins screen in WordPress.
+3. Go to the Enterprise API Importer admin pages to configure your API connections, filtering rules, and mapping templates.
 
 == Frequently Asked Questions ==
-= Does this require WP-Cron? =
-Yes. For production reliability, configure a real server cron to trigger wp-cron.php.
+= Does this require WP-CLI? =
+No. It uses native WP-Cron scheduling, but supports CLI triggers.
 
-= What template syntax can I use? =
-Twig syntax is supported, including:
-- Variable output: {{ record.title }}
-- Nested values: {{ record.course.name }}
-- Conditionals: {% if record.isActive %}...{% endif %}
-- Loops: {% for row in record.items %}...{% endfor %}
+= Can I parse nested JSON arrays? =
+Yes. Nested objects and arrays can be parsed and transformed through Twig templating.
 
-Built-in Twig helpers:
-- Numeric test: {% if record.Amount is numeric %}...{% endif %}
-- Currency filter: {{ record.Amount|format_us_currency }}
-- Date filter: {{ record.BeginDate|format_date_mdy }} (MM/DD/YYYY when parsable)
+= Does it handle API authentication? =
+Yes. It supports Bearer Tokens and custom headers.
+
+== Screenshots ==
+1. The Twig Mapping Interface for transforming JSON data.
+2. The Schedules and Logs Health Dashboard.
+3. API Connection and Data Filtering rules.
 
 == Changelog ==
-= 0.1.0 =
-* Initial public release.
-
-== Upgrade Notice ==
-= 0.1.0 =
-Initial release.
+= 1.0.0 =
+* Initial Release.

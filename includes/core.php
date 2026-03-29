@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'EAI_DB_SCHEMA_VERSION' ) ) {
-	define( 'EAI_DB_SCHEMA_VERSION', '20260327-3' );
+	define( 'EAI_DB_SCHEMA_VERSION', '20260329-5' );
 }
 
 /**
@@ -39,6 +39,8 @@ function eai_activate_plugin() {
 		recurrence varchar(32) NOT NULL DEFAULT 'off',
 		custom_interval_minutes int(10) unsigned NOT NULL DEFAULT 0,
 		filter_rules longtext NULL,
+		target_post_type varchar(100) NOT NULL DEFAULT 'post',
+		title_template varchar(255) NOT NULL DEFAULT '',
 		mapping_template longtext NOT NULL,
 		created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY  (id),
