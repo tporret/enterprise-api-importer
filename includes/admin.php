@@ -559,6 +559,8 @@ $defaults = array(
 'recurrence'       => 'off',
 'custom_interval_minutes' => 30,
 'filter_rules'     => '[]',
+'target_post_type' => 'post',
+'title_template'   => '',
 'mapping_template' => '',
 );
 $import = is_array( $import_row ) ? wp_parse_args( $import_row, $defaults ) : $defaults;
@@ -566,6 +568,37 @@ $import['custom_interval_minutes'] = absint( $import['custom_interval_minutes'] 
 if ( 'custom' === (string) $import['recurrence'] && $import['custom_interval_minutes'] <= 0 ) {
 	$import['custom_interval_minutes'] = 30;
 }
+$import['target_post_type'] = sanitize_key( (string) $import['target_post_type'] );
+if ( '' === $import['target_post_type'] ) {
+	$import['target_post_type'] = 'post';
+}
+
+$public_post_types = get_post_types( array( 'public' => true ), 'objects' );
+$public_post_types = is_array( $public_post_types ) ? $public_post_types : array();
+
+if ( isset( $public_post_types['attachment'] ) ) {
+	unset( $public_post_types['attachment'] );
+}
+
+$saved_post_type   = (string) $import['target_post_type'];
+
+if ( ! post_type_exists( $saved_post_type ) ) {
+	$saved_post_type = 'post';
+}
+
+if ( ! isset( $public_post_types[ $saved_post_type ] ) ) {
+	if ( isset( $public_post_types['post'] ) ) {
+		$saved_post_type = 'post';
+	} elseif ( ! empty( $public_post_types ) ) {
+		$first_post_type = array_key_first( $public_post_types );
+		$saved_post_type = is_string( $first_post_type ) ? $first_post_type : 'post';
+	} else {
+		$saved_post_type = 'post';
+	}
+}
+
+$import['target_post_type'] = $saved_post_type;
+
 $filter_operator_options = eai_get_filter_operator_options();
 $decoded_filter_rules    = json_decode( (string) $import['filter_rules'], true );
 $filter_rules_for_ui     = array();
@@ -685,6 +718,17 @@ $is_edit = (int) $import['id'] > 0;
 </td>
 </tr>
 <tr>
+<th scope="row"><label for="eai_import_target_post_type"><?php esc_html_e( 'Target Post Type', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<select name="target_post_type" id="eai_import_target_post_type">
+<?php foreach ( $public_post_types as $post_type_name => $post_type_object ) : ?>
+<option value="<?php echo esc_attr( (string) $post_type_name ); ?>" <?php selected( (string) $import['target_post_type'], (string) $post_type_name ); ?>><?php echo esc_html( (string) $post_type_object->labels->name ); ?></option>
+<?php endforeach; ?>
+</select>
+<p class="description"><?php esc_html_e( 'Select which public WordPress post type receives imported records.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr>
 <th scope="row"><?php esc_html_e( 'Data Filters', 'enterprise-api-importer' ); ?></th>
 <td>
 <p class="description"><?php esc_html_e( 'Only records matching every filter are staged for import (AND logic).', 'enterprise-api-importer' ); ?></p>
@@ -774,6 +818,13 @@ $is_edit = (int) $import['id'] > 0;
 	} );
 } )();
 </script>
+</td>
+</tr>
+<tr>
+<th scope="row"><label for="eai_import_title_template"><?php esc_html_e( 'Post Title Template', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="title_template" type="text" id="eai_import_title_template" class="large-text" maxlength="255" value="<?php echo esc_attr( (string) $import['title_template'] ); ?>" />
+<p class="description"><?php esc_html_e( 'Supports Twig syntax (for example: {{ user.first_name }} {{ user.last_name }}). If left blank, defaults to Imported Item {ID}.', 'enterprise-api-importer' ); ?></p>
 </td>
 </tr>
 <tr>
@@ -935,8 +986,16 @@ $array_path   = isset( $post_data['array_path'] ) ? sanitize_text_field( (string
 	$unique_id_path = isset( $post_data['unique_id_path'] ) ? sanitize_text_field( (string) $post_data['unique_id_path'] ) : 'id';
 $recurrence   = isset( $post_data['recurrence'] ) ? sanitize_key( (string) $post_data['recurrence'] ) : 'off';
 $custom_interval_minutes = isset( $post_data['custom_interval_minutes'] ) ? absint( $post_data['custom_interval_minutes'] ) : 0;
+$target_post_type = isset( $post_data['target_post_type'] ) ? sanitize_key( (string) $post_data['target_post_type'] ) : 'post';
+$title_template = isset( $post_data['title_template'] ) ? sanitize_text_field( (string) $post_data['title_template'] ) : '';
 $template_raw = isset( $post_data['mapping_template'] ) ? (string) $post_data['mapping_template'] : '';
 	$unique_id_path = trim( (string) $unique_id_path );
+	$target_post_type = trim( (string) $target_post_type );
+	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
+		$target_post_type = 'post';
+	}
+	$title_template = trim( (string) $title_template );
+	$title_template = mb_substr( $title_template, 0, 255 );
 
 $allowed_recurrence = array( 'off', 'hourly', 'twicedaily', 'daily', 'custom' );
 if ( ! in_array( $recurrence, $allowed_recurrence, true ) ) {
@@ -1018,9 +1077,11 @@ $data = array(
 'recurrence'       => $recurrence,
 'custom_interval_minutes' => $custom_interval_minutes,
 'filter_rules'     => (string) $filter_rules_json,
+'target_post_type' => $target_post_type,
+'title_template'   => $title_template,
 'mapping_template' => $mapping_template,
 );
-	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s' );
+	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' );
 
 $persisted_import_id = eai_db_save_import_config( $import_id, $data, $formats );
 if ( is_wp_error( $persisted_import_id ) ) {

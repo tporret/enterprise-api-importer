@@ -9,6 +9,155 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/**
+ * Core import processing helpers.
+ */
+class EAI_Import_Processor {
+	/**
+	 * Downloads and sideloads one remote image into the media library.
+	 *
+	 * Idempotency: if an attachment already exists with matching _eapi_source_url,
+	 * the existing attachment ID is returned immediately and no new download occurs.
+	 *
+	 * @param mixed $image_url   Absolute image URL.
+	 * @param mixed $post_id     Parent post ID.
+	 * @param mixed $is_featured Whether to assign as featured image.
+	 *
+	 * @return int|false Attachment ID on success, false on failure.
+	 */
+	public static function sideload_image( $image_url, $post_id, $is_featured = false ) {
+		$image_url   = is_string( $image_url ) ? trim( $image_url ) : '';
+		$post_id     = absint( $post_id );
+		$is_featured = (bool) $is_featured;
+
+		if ( '' === $image_url || $post_id <= 0 || ! wp_http_validate_url( $image_url ) ) {
+			self::log_media_error(
+				'Invalid Media URL',
+				$image_url,
+				$post_id,
+				__( 'Invalid media URL or post ID supplied for sideload.', 'enterprise-api-importer' )
+			);
+
+			return false;
+		}
+
+		$source_url = esc_url_raw( $image_url );
+
+		$existing_attachment_query = new WP_Query(
+			array(
+				'post_type'              => 'attachment',
+				'post_status'            => 'any',
+				'fields'                 => 'ids',
+				'posts_per_page'         => 1,
+				'no_found_rows'          => true,
+				'ignore_sticky_posts'    => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+				'meta_query'             => array(
+					array(
+						'key'     => '_eapi_source_url',
+						'value'   => $source_url,
+						'compare' => '=',
+					),
+				),
+			)
+		);
+
+		if ( ! empty( $existing_attachment_query->posts ) ) {
+			return (int) $existing_attachment_query->posts[0];
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		require_once ABSPATH . 'wp-admin/includes/media.php';
+		require_once ABSPATH . 'wp-admin/includes/image.php';
+
+		$temp_file = download_url( $source_url );
+
+		if ( is_wp_error( $temp_file ) ) {
+			self::log_media_error(
+				'Media Download Error',
+				$source_url,
+				$post_id,
+				$temp_file->get_error_message()
+			);
+
+			return false;
+		}
+
+		$url_path = parse_url( $source_url, PHP_URL_PATH );
+		$file_name = is_string( $url_path ) ? basename( $url_path ) : '';
+
+		if ( '' === $file_name ) {
+			$file_name = 'eapi-image-' . wp_generate_password( 12, false ) . '.jpg';
+		}
+
+		$file_array = array(
+			'name'     => sanitize_file_name( rawurldecode( $file_name ) ),
+			'tmp_name' => $temp_file,
+		);
+
+		$attachment_id = media_handle_sideload( $file_array, $post_id );
+
+		if ( is_wp_error( $attachment_id ) ) {
+			if ( isset( $file_array['tmp_name'] ) && is_string( $file_array['tmp_name'] ) ) {
+				@unlink( $file_array['tmp_name'] );
+			}
+
+			self::log_media_error(
+				'Media Sideload Error',
+				$source_url,
+				$post_id,
+				$attachment_id->get_error_message()
+			);
+
+			return false;
+		}
+
+		$attachment_id = (int) $attachment_id;
+		update_post_meta( $attachment_id, '_eapi_source_url', $source_url );
+
+		if ( $is_featured ) {
+			set_post_thumbnail( $post_id, $attachment_id );
+		}
+
+		return $attachment_id;
+	}
+
+	/**
+	 * Writes a media-processing error row to the import logs table.
+	 *
+	 * @param string $status    Log status label.
+	 * @param string $image_url Source image URL.
+	 * @param int    $post_id   Target post ID.
+	 * @param string $message   Error message.
+	 *
+	 * @return void
+	 */
+	private static function log_media_error( $status, $image_url, $post_id, $message ) {
+		$now         = gmdate( 'Y-m-d H:i:s', time() );
+		$run_id      = wp_generate_uuid4();
+		$status      = sanitize_text_field( (string) $status );
+		$image_url   = esc_url_raw( (string) $image_url );
+		$post_id     = absint( $post_id );
+		$message     = sanitize_text_field( (string) $message );
+		$error_json  = wp_json_encode(
+			array(
+				'media_error' => true,
+				'image_url'   => $image_url,
+				'post_id'     => $post_id,
+				'message'     => $message,
+			),
+			JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+		);
+
+		if ( false === $error_json ) {
+			$error_json = '{"media_error":true,"message":"JSON encoding failed"}';
+		}
+
+		eai_db_insert_import_log( 0, $run_id, $status, 0, 0, 0, (string) $error_json, $now );
+	}
+}
+
 add_action( 'eai_process_import_queue', 'eai_handle_scheduled_import_batch' );
 add_action( 'ncsu_api_importer_batch_hook', 'eai_handle_import_batch_hook', 10, 2 );
 add_action( 'eai_recurring_import_trigger', 'eai_handle_import_batch_hook', 10, 2 );
@@ -610,24 +759,32 @@ function eai_resolve_json_array_path( $decoded_json, $path ) {
 }
 
 /**
- * Transforms and loads a single API record into the imported_item post type.
+ * Transforms and loads a single API record into the configured post type.
  *
  * @param array<string, mixed> $item Single API record.
  *
  * @param string $mapping_template Mapping template for this import job.
+ * @param string $title_template   Optional title template for this import job.
+ * @param string $target_post_type Target post type for this import job.
  * @param string $unique_id_path   Unique identifier path. Defaults to id.
  * @param int    $import_id        Import job ID.
  *
  * @return array<string, mixed>|WP_Error
  */
-function eai_transform_and_load_item( $item, $mapping_template, $unique_id_path = 'id', $import_id = 0 ) {
+function eai_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0 ) {
 	if ( ! is_array( $item ) ) {
 		return new WP_Error( 'eai_invalid_item', __( 'Transform input must be an array.', 'enterprise-api-importer' ) );
 	}
 
 	$mapping_template = (string) $mapping_template;
+	$title_template   = trim( (string) $title_template );
+	$target_post_type = sanitize_key( (string) $target_post_type );
 	$unique_id_path   = trim( (string) $unique_id_path );
 	$import_id        = absint( $import_id );
+
+	if ( '' === $target_post_type || 'attachment' === $target_post_type || ! post_type_exists( $target_post_type ) ) {
+		$target_post_type = 'post';
+	}
 
 	if ( '' === $unique_id_path ) {
 		$unique_id_path = 'id';
@@ -684,15 +841,65 @@ function eai_transform_and_load_item( $item, $mapping_template, $unique_id_path 
 		return $post_content;
 	}
 
+	$fallback_record_id = $external_id;
+	if ( isset( $item['id'] ) && is_scalar( $item['id'] ) && '' !== (string) $item['id'] ) {
+		$fallback_record_id = (string) $item['id'];
+	}
+
 	$post_title = sprintf(
 		/* translators: %s is the external API record ID. */
 		__( 'Imported Item %s', 'enterprise-api-importer' ),
-		$external_id
+		$fallback_record_id
 	);
+
+	if ( '' !== $title_template ) {
+		$twig = eai_get_twig_environment();
+
+		if ( is_wp_error( $twig ) ) {
+			return $twig;
+		}
+
+		$loader = $twig->getLoader();
+		if ( ! $loader instanceof \Twig\Loader\ArrayLoader ) {
+			return new WP_Error( 'eai_twig_loader_invalid', __( 'Twig loader is not configured for string templates.', 'enterprise-api-importer' ) );
+		}
+
+		$template_name = 'title-template-' . md5( $title_template );
+
+		try {
+			$loader->setTemplate( $template_name, $title_template );
+
+			$rendered_title = (string) $twig->render(
+				$template_name,
+				array(
+					'record' => $item,
+					'item'   => $item,
+					'data'   => $item,
+				)
+			);
+		} catch ( \Twig\Error\Error $error ) {
+			return new WP_Error(
+				'eai_template_syntax_error',
+				sprintf(
+					/* translators: %s is the Twig exception message. */
+					__( 'Twig template syntax error: %s', 'enterprise-api-importer' ),
+					$error->getMessage()
+				)
+			);
+		}
+
+		$rendered_title = wp_strip_all_tags( $rendered_title );
+		$rendered_title = trim( $rendered_title );
+		$rendered_title = mb_substr( $rendered_title, 0, 255 );
+
+		if ( '' !== $rendered_title ) {
+			$post_title = $rendered_title;
+		}
+	}
 
 	$existing_posts = get_posts(
 		array(
-			'post_type'              => 'imported_item',
+			'post_type'              => $target_post_type,
 			'posts_per_page'         => 1,
 			'post_status'            => 'any',
 			'fields'                 => 'ids',
@@ -720,7 +927,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $unique_id_path 
 	if ( empty( $existing_posts ) ) {
 		$insert_post_id = wp_insert_post(
 			array(
-				'post_type'    => 'imported_item',
+				'post_type'    => $target_post_type,
 				'post_status'  => 'publish',
 				'post_title'   => $post_title,
 				'post_content' => $post_content,
@@ -753,6 +960,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $unique_id_path 
 		$updated_post_id = wp_update_post(
 			array(
 				'ID'           => $existing_post_id,
+				'post_title'   => $post_title,
 				'post_content' => $post_content,
 			),
 			true
@@ -770,7 +978,28 @@ function eai_transform_and_load_item( $item, $mapping_template, $unique_id_path 
 		);
 	}
 
-	// Touch sync timestamp even when content is unchanged so valid items are not treated as orphans.
+	if ( (string) $existing_post->post_title !== (string) $post_title ) {
+		$updated_title_post_id = wp_update_post(
+			array(
+				'ID'         => $existing_post_id,
+				'post_title' => $post_title,
+			),
+			true
+		);
+
+		if ( is_wp_error( $updated_title_post_id ) ) {
+			return $updated_title_post_id;
+		}
+
+		update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+
+		return array(
+			'action'  => 'updated',
+			'post_id' => $existing_post_id,
+		);
+	}
+
+	// Touch sync timestamp even when content and title are unchanged so valid items are not treated as orphans.
 	update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
 
 	return array(
@@ -1163,6 +1392,8 @@ function eai_process_unprocessed_staging_rows( $started_at_microtime, $import_id
 
 		$items            = eai_normalize_staged_items( $decoded_items );
 		$mapping_template = (string) $import_job['mapping_template'];
+		$title_template   = isset( $import_job['title_template'] ) ? (string) $import_job['title_template'] : '';
+		$target_post_type = isset( $import_job['target_post_type'] ) ? (string) $import_job['target_post_type'] : 'post';
 		$unique_id_path   = isset( $import_job['unique_id_path'] ) ? trim( (string) $import_job['unique_id_path'] ) : 'id';
 		$chunks           = array_chunk( $items, 50 );
 		$row_completed    = true;
@@ -1182,7 +1413,7 @@ function eai_process_unprocessed_staging_rows( $started_at_microtime, $import_id
 
 				++$result['rows_processed'];
 
-				$item_result = eai_transform_and_load_item( $item, $mapping_template, $unique_id_path, $row_import_id );
+				$item_result = eai_transform_and_load_item( $item, $mapping_template, $title_template, $target_post_type, $unique_id_path, $row_import_id );
 
 				if ( is_wp_error( $item_result ) ) {
 					$result['errors'][] = sprintf(

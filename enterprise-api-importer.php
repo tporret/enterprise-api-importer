@@ -1,11 +1,12 @@
 <?php
 /**
  * Plugin Name: Enterprise API Importer
- * Plugin URI:  https://github.com/enterprise-api-importer
+ * Plugin URI:  https://github.com/tporret/enterprise-api-importer
  * Description: Highly secure enterprise ETL importer for WordPress.
- * Version:     0.1.0
+ * Version:     1.0.0
  * Author:      tporret
  * License:     GPL-2.0-or-later
+ * Requires PHP: 8.1
  * Tested up to: 6.9
  * Text Domain: enterprise-api-importer
  */

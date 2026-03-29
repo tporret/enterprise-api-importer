@@ -1,198 +1,255 @@
 # Enterprise API Importer
 
-Enterprise API Importer is a WordPress plugin for running structured API-to-WordPress ETL jobs.
-It supports multiple import connections, staged processing, job health visibility, and per-import recurring schedules.
+Enterprise API Importer is a WordPress plugin for secure, repeatable API-to-WordPress ETL.
+It is built for teams that need enterprise-grade reliability without losing flexibility.
 
-## What this plugin does
+If you are non-technical: this plugin lets you connect external APIs and keep WordPress content in sync.
+If you are technical: you get a staged, idempotent, template-driven pipeline with cron orchestration and detailed run logs.
 
-- Creates and manages multiple import jobs from wp-admin.
-- Pulls JSON data from external endpoints (Bearer token optional).
-- Resolves array payloads via configurable JSON path.
-- Filters records before staging using configurable rule-based conditions.
-- Maps records into `imported_item` posts using Twig templates (loops, conditionals, nested data).
-- Supports configurable unique ID path per import (defaults to `id`).
-- Processes records in batches through a queue worker for safer long runs.
-- Supports per-import recurrence:
-  - `off`
-  - `hourly`
-  - `twicedaily`
-  - `daily`
-  - `custom` (every N minutes)
-- Provides schedules and health dashboard with trigger source and run details.
-- Includes endpoint testing and data preview before running an import.
+## Why This Plugin Exists
 
-## Quickstart
+Most import tools break down when payloads are nested, schedules are long-running, or data quality is inconsistent.
+This plugin is designed for those hard cases.
 
-### 1. Install and activate
+It gives you:
 
-1. Place this plugin folder in `wp-content/plugins/`.
-2. Install Composer dependency in the plugin root:
-  - `composer require twig/twig`
-3. In WordPress admin, go to Plugins.
-4. Activate Enterprise API Importer.
+- Control over what records are imported.
+- Control over how records are transformed.
+- Control over where records are loaded (selected post type).
+- Safety rails for long-running jobs and production operations.
 
-On activation, the plugin creates/migrates required tables.
+## Core Capabilities
 
-### 2. Create your first import job
+- Multi-import job manager in wp-admin.
+- External API extraction with optional Bearer token support.
+- JSON array path resolution for nested payloads.
+- Rule-based pre-stage filtering (AND logic).
+- Twig-based mapping templates for complex transformations.
+- Twig-based post title templates with safe sanitization.
+- Configurable target post type per import job.
+- Queue-based batch processor to avoid timeout-heavy monolithic runs.
+- Per-import recurrence schedules (`off`, `hourly`, `twicedaily`, `daily`, custom N-minute intervals).
+- Health and schedule dashboard with run stats and trigger source visibility.
+- Endpoint test and preview tools before production execution.
 
-1. Go to **EAPI -> Manage Imports**.
-2. Click **Add New**.
-3. Fill in:
-   - Name
-   - Endpoint URL
-   - Bearer Token (if needed)
-   - JSON Array Path (optional)
-   - Unique ID Path (for example `CourseIDFull`; defaults to `id`)
-  - Data Filters (optional): Key, Operator, Value rows using AND logic
-   - Recurrence (Off/Hourly/Twice Daily/Daily/Custom)
-   - Custom minutes (only for Custom recurrence)
-   - Mapping Template
-4. Save the import.
+## What Was Recently Added
 
-### 3. Validate endpoint before import
+### 1) Dynamic Post Title Templates (Twig)
 
-1. Open the import job edit page.
-2. Use **Endpoint Test & Preview**.
-3. Review payload shape, sample keys, and preview output.
+You can now define a `Post Title Template` per import.
 
-### 4. Run import
+- Uses Twig syntax (for example, `{{ user.first_name }} {{ user.last_name }}`).
+- Rendered with the same context aliases: `record`, `item`, `data`.
+- Rendered output is sanitized with `wp_strip_all_tags()`.
+- Title is truncated to 255 characters via `mb_substr()` to avoid DB truncation issues.
+- If blank (or render result is empty), fallback title remains `Imported Item {ID}`.
 
-1. Click **Run Import Now** on the import edit page, or
-2. Use **EAPI -> Schedules** and click **Run Now** for that import.
+### 2) Target Post Type Selector
 
-### 5. Monitor health
+You can now choose the destination post type per import job.
 
-1. Go to **EAPI -> Schedules**.
-2. Review:
-   - Status
-   - Trigger Source (`Manual Run`, `Run Now`, `Recurring Schedule`)
-   - Last run metrics
-   - Details
-   - Next scheduled run
+- Dropdown is dynamically populated from public post types.
+- Saved value is sanitized using `sanitize_key()`.
+- Runtime fallback is automatic:
+  - if empty, fallback to `post`
+  - if unregistered on the site, fallback to `post`
+- `attachment` is intentionally blocked by default for safety.
 
-## Mapping template basics (Twig)
+### 3) Secure Media Sideload Helper (Foundation)
 
-Mapping templates are rendered with Twig.
+A new static helper is available in the processing layer:
 
-Examples:
+- `EAI_Import_Processor::sideload_image( $image_url, $post_id, $is_featured = false )`
 
-- `{{ record.title }}`
-- `{{ record.CourseIDFull }}`
-- `{{ record.course.name }}`
-- `{% if record.isActive %}<p>Active</p>{% endif %}`
-- `{% for module in record.modules %}<li>{{ module.name }}</li>{% endfor %}`
+Design goals:
 
-Notes:
+- Idempotent media handling using `_eapi_source_url` matching.
+- Secure download flow via `download_url()` and WP media APIs.
+- Safe error handling with logs in `wp_custom_import_logs`.
+- Optional featured image assignment via `set_post_thumbnail()`.
 
-- Nested traversal is supported using Twig dot access (for example `record.course.name`).
-- The transform context exposes the same payload as `record`, `item`, and `data`.
-- Auto-escaping is disabled so intended HTML is preserved in `post_content`.
-- Malformed Twig templates are caught safely and logged under status `Template Syntax Error`; processing skips that record instead of crashing the batch.
+Note: this helper is now implemented and available for integration into your field mapping/media ingestion strategy.
 
-Built-in Twig helpers:
+## Data Flow (ETL)
 
-- Test `numeric`: `{% if record.Price is numeric %}...{% endif %}`
-- Filter `format_us_currency`: `{{ record.Price|format_us_currency }}`
-- Filter `format_date_mdy`: `{{ record.BeginDate|format_date_mdy }}` (outputs `MM/DD/YYYY` when parsable)
+1. Extract
+- API payload is fetched.
+- JSON is validated and decoded.
+- `array_path` is resolved to the target data collection.
 
-## Detailed functional spec
+2. Filter
+- Configured filter rules are applied before staging.
+- Only matching rows move forward.
 
-### Admin surfaces
+3. Stage
+- Selected rows are written to `wp_custom_import_temp`.
+- This decouples remote API latency from transform/load runtime.
 
-- Top-level menu: `EAPI`
-- Submenus:
-  - `Manage Imports`
-  - `Schedules`
+4. Transform
+- Data is normalized.
+- Unique external key is resolved via `unique_id_path`.
+- Twig template renders post content.
+- Optional Twig title template renders post title.
 
-### Data model
+5. Load
+- Upsert logic identifies records by `_my_custom_api_id` + `_eai_import_id`.
+- Records are inserted/updated in the selected post type.
+- Sync timestamp and ownership metadata are maintained.
 
-Primary tables used by the plugin:
+6. Finalize
+- Staging rows are marked processed.
+- Orphan handling and run logging complete the cycle.
+
+## Admin Workflow (Step-by-Step)
+
+### 1. Create an Import Job
+
+Go to `EAPI -> Manage Imports` and click `Add New`.
+
+Configure:
+
+- Name
+- Endpoint URL
+- Bearer Token (optional)
+- JSON Array Path (optional)
+- Unique ID Path (optional, defaults to `id`)
+- Recurrence and custom interval (if needed)
+- Target Post Type
+- Data Filters
+- Post Title Template (optional Twig)
+- Mapping Template (Twig)
+
+### 2. Test Before Running
+
+Use `Endpoint Test & Preview` from the import edit screen.
+
+This validates connectivity and lets you inspect:
+
+- payload shape
+- sample keys
+- normalized preview
+- mapped output preview
+
+### 3. Run and Monitor
+
+Run manually from the import edit screen or from `EAPI -> Schedules`.
+Track status, run counts, and errors from the dashboard.
+
+## Security and Reliability Model
+
+- Capability-gated admin operations (`manage_options`).
+- Nonce checks on admin-post actions.
+- Input sanitization before persistence.
+- Output escaping in admin views.
+- Queue-first architecture for long-running workloads.
+- Staging table isolation to support resumable processing.
+- Defensive fallbacks for invalid config states.
+
+## Database Tables
 
 - `wp_eapi_imports`
-  - stores import definitions (endpoint, auth, mapping, unique id path, recurrence)
+  - import definitions and processing settings
+  - includes fields such as:
+    - endpoint/auth/paths
+    - recurrence settings
+    - `target_post_type`
+    - `title_template`
+    - `mapping_template`
+
 - `wp_custom_import_temp`
-  - staging area for extracted payload rows
+  - staged payload fragments per import
+
 - `wp_custom_import_logs`
-  - run logs and processing details
+  - run outcomes, row counts, and error details
 
-### ETL workflow
+## Scheduling Model
 
-1. **Extract**
-   - Fetch endpoint payload.
-   - Validate HTTP response and JSON decoding.
-   - Resolve `array_path` target.
-  - Apply configured Data Filters (AND logic) to records before staging.
-2. **Stage**
-   - Store serialized selected payload in temp table with `import_id`.
-3. **Transform**
-   - Normalize staged items.
-   - Resolve external ID from configurable `unique_id_path`.
-  - Render database-stored Twig templates from strings.
-4. **Load**
-   - Upsert into `imported_item` by:
-     - `_my_custom_api_id`
-     - `_eai_import_id`
-   - Track `_last_synced_timestamp`.
-5. **Finalize**
-   - Mark staged rows processed.
-   - Trash orphaned imported posts for this import scope.
-   - Write log with counts, errors, and trigger source.
+- Recurring trigger hook: `eai_recurring_import_trigger`
+- Immediate trigger hook: `ncsu_api_importer_batch_hook`
+- Queue worker hook: `eai_process_import_queue`
 
-### Scheduling model
+Each run tracks trigger context (`manual`, `run_now`, `recurring`) for operational traceability.
 
-The plugin uses two trigger paths:
+## Twig Examples
 
-- **Recurring trigger**
-  - Hook: `eai_recurring_import_trigger`
-  - Registered per import when recurrence is enabled.
-- **Immediate trigger (Run Now)**
-  - Hook: `ncsu_api_importer_batch_hook`
+Basic value:
 
-Both trigger paths feed the same import processor.
-Long-running jobs are chunked via queue worker:
+```twig
+{{ record.title }}
+```
 
-- Hook: `eai_process_import_queue`
+Nested path:
 
-### Trigger source tracking
+```twig
+{{ record.course.name }}
+```
 
-Each run carries a trigger source in logs:
+Loop:
 
-- `manual`
-- `run_now`
-- `recurring`
+```twig
+<ul>
+{% for module in record.modules %}
+  <li>{{ module.name }}</li>
+{% endfor %}
+</ul>
+```
 
-This is exposed in the Schedules dashboard as user-friendly labels.
+Conditional:
 
-### Security model
+```twig
+{% if record.isActive %}
+  <p>Active</p>
+{% endif %}
+```
 
-- Admin actions are restricted with capability checks (`manage_options`).
-- Forms and actions use nonces for CSRF protection.
-- Inputs are sanitized before persistence.
-- Output is escaped in admin views.
+Title template example:
 
-## Operational notes
+```twig
+{{ record.last_name }}, {{ record.first_name }}
+```
 
-- WP-Cron execution depends on site traffic unless a real cron is configured.
-- For production reliability, consider a server cron hitting `wp-cron.php`.
-- If an import appears idle, check recurring setting and next scheduled run in Schedules.
+Built-in Twig extensions:
 
-## File structure
+- test: `numeric`
+- filter: `format_us_currency`
+- filter: `format_date_mdy`
 
-- `enterprise-api-importer.php` plugin bootstrap
-- `includes/core.php` activation and schema migration
-- `includes/content.php` custom post type registration
-- `includes/import.php` ETL engine, queue, and cron logic
+## Requirements
+
+- WordPress 6.x
+- PHP 8.1+
+- Composer dependency: `twig/twig`
+
+Install dependency in plugin root:
+
+```bash
+composer require twig/twig
+```
+
+## Operational Recommendations
+
+- Use real server cron for production reliability.
+- Validate endpoint previews before enabling recurrence.
+- Keep mapping/title templates under source control (copy into your repo/docs).
+- Start with smaller intervals and observe logs before scaling throughput.
+
+## File Map
+
+- `enterprise-api-importer.php` bootstrap
+- `includes/core.php` activation and schema migrations
+- `includes/content.php` CPT registration
+- `includes/import.php` ETL engine, queue, cron orchestration, media helper
 - `includes/admin.php` admin UI and admin-post handlers
-- `includes/class-eapi-imports-list-table.php` import list table
+- `includes/db.php` database access and log writes
+- `includes/class-eapi-imports-list-table.php` admin list rendering
 
-## Development notes
-
-Recommended quick checks:
+## Developer Quick Checks
 
 ```bash
 php -l enterprise-api-importer.php
 php -l includes/core.php
 php -l includes/content.php
+php -l includes/db.php
 php -l includes/import.php
 php -l includes/admin.php
 php -l includes/class-eapi-imports-list-table.php
