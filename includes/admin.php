@@ -56,6 +56,201 @@ add_action( 'admin_post_eai_schedule_run_now', 'eai_handle_schedule_run_now_acti
 add_action( 'admin_init', 'eai_register_admin_post_handlers' );
 
 /**
+ * Registers REST routes for async admin tooling.
+ *
+ * @return void
+ */
+function eai_register_rest_routes() {
+	register_rest_route(
+		'eapi/v1',
+		'/dry-run',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'eai_rest_dry_run_template_preview',
+			'permission_callback' => static function () {
+				return current_user_can( 'manage_options' );
+			},
+		)
+	);
+}
+add_action( 'rest_api_init', 'eai_register_rest_routes' );
+
+/**
+ * Executes a dry-run Twig preview against a live API response without persisting any data.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_dry_run_template_preview( WP_REST_Request $request ) {
+	$params         = $request->get_json_params();
+	$params         = is_array( $params ) ? $params : array();
+	$api_url        = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
+	$data_filters   = isset( $params['data_filters'] ) && is_array( $params['data_filters'] ) ? $params['data_filters'] : array();
+	$title_template = isset( $params['title_template'] ) ? (string) $params['title_template'] : '';
+	$body_template  = isset( $params['body_template'] ) ? (string) $params['body_template'] : '';
+	$auth_token     = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
+
+	if ( '' === $api_url || ! wp_http_validate_url( $api_url ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_invalid_api_url',
+				'message' => __( 'A valid API URL is required for dry run.', 'enterprise-api-importer' ),
+			),
+			400
+		);
+	}
+
+	$headers = array(
+		'Accept' => 'application/json',
+	);
+
+	if ( '' !== $auth_token ) {
+		$headers['Authorization'] = 'Bearer ' . $auth_token;
+	}
+
+	$response = wp_remote_get(
+		$api_url,
+		array(
+			'timeout'     => 30,
+			'redirection' => 3,
+			'headers'     => $headers,
+		)
+	);
+
+	if ( is_wp_error( $response ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_remote_request_failed',
+				'message' => $response->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$status_code = (int) wp_remote_retrieve_response_code( $response );
+	if ( $status_code < 200 || $status_code >= 300 ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_remote_http_error',
+				'message' => sprintf(
+					/* translators: %d is HTTP status code. */
+					__( 'Dry run request failed with HTTP status %d.', 'enterprise-api-importer' ),
+					$status_code
+				),
+			),
+			400
+		);
+	}
+
+	$raw_body = (string) wp_remote_retrieve_body( $response );
+	$decoded  = json_decode( $raw_body, true );
+
+	if ( JSON_ERROR_NONE !== json_last_error() ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_invalid_json',
+				'message' => sprintf(
+					/* translators: %s is JSON decode error text. */
+					__( 'Unable to parse API JSON: %s', 'enterprise-api-importer' ),
+					json_last_error_msg()
+				),
+			),
+			400
+		);
+	}
+
+	$array_path = isset( $data_filters['array_path'] ) ? sanitize_text_field( (string) $data_filters['array_path'] ) : '';
+	$records    = '' === $array_path ? $decoded : eai_resolve_json_array_path( $decoded, $array_path );
+
+	if ( is_wp_error( $records ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_invalid_array_path',
+				'message' => $records->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$incoming_rules = isset( $data_filters['rules'] ) && is_array( $data_filters['rules'] ) ? $data_filters['rules'] : array();
+	$filter_rules   = eai_decode_filter_rules_json( wp_json_encode( $incoming_rules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+
+	if ( ! empty( $filter_rules ) ) {
+		$records = eai_apply_filter_rules_to_records( is_array( $records ) ? $records : array(), $filter_rules );
+	}
+
+	$record = null;
+	if ( is_array( $records ) && ! empty( $records ) ) {
+		$record = eai_array_is_list( $records ) ? $records[0] : $records;
+	}
+
+	if ( ! is_array( $record ) || empty( $record ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_no_record_found',
+				'message' => __( 'Dry run could not find a record after applying filters.', 'enterprise-api-importer' ),
+			),
+			400
+		);
+	}
+
+	$twig = eai_get_twig_environment();
+	if ( is_wp_error( $twig ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_twig_unavailable',
+				'message' => $twig->get_error_message(),
+			),
+			500
+		);
+	}
+
+	$loader = $twig->getLoader();
+	if ( ! $loader instanceof \Twig\Loader\ArrayLoader ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_twig_loader_invalid',
+				'message' => __( 'Twig loader is not configured for string templates.', 'enterprise-api-importer' ),
+			),
+			500
+		);
+	}
+
+	$template_context = array(
+		'record' => $record,
+		'item'   => $record,
+		'data'   => $record,
+	);
+
+	try {
+		$loader->setTemplate( 'eai-dry-run-title', $title_template );
+		$rendered_title = (string) $twig->render( 'eai-dry-run-title', $template_context );
+
+		$loader->setTemplate( 'eai-dry-run-body', $body_template );
+		$rendered_body = (string) $twig->render( 'eai-dry-run-body', $template_context );
+	} catch ( \Twig\Error\Error $twig_error ) {
+		return new WP_REST_Response(
+			array(
+				'code'        => 'eai_twig_render_error',
+				'message'     => $twig_error->getMessage(),
+				'line_number' => method_exists( $twig_error, 'getTemplateLine' ) ? (int) $twig_error->getTemplateLine() : 0,
+			),
+			400
+		);
+	}
+
+	return new WP_REST_Response(
+		array(
+			'raw_data'       => $record,
+			'rendered_title' => sanitize_text_field( $rendered_title ),
+			'rendered_body'  => wp_kses_post( $rendered_body ),
+		),
+		200
+	);
+}
+
+/**
  * Renders admin notices for this plugin.
  */
 function eai_render_admin_notices() {
@@ -829,7 +1024,13 @@ $is_edit = (int) $import['id'] > 0;
 </tr>
 <tr>
 <th scope="row"><label for="eai_import_mapping_template"><?php esc_html_e( 'Mapping Template', 'enterprise-api-importer' ); ?></label></th>
-<td><textarea name="mapping_template" id="eai_import_mapping_template" rows="12" class="large-text code" required><?php echo esc_textarea( (string) $import['mapping_template'] ); ?></textarea></td>
+<td>
+<div id="eai-dry-run-error" class="notice notice-error" style="display:none; margin:0 0 12px; padding:8px 12px;"></div>
+<textarea name="mapping_template" id="eai_import_mapping_template" rows="12" class="large-text code" required><?php echo esc_textarea( (string) $import['mapping_template'] ); ?></textarea>
+<p style="margin-top:10px;">
+<button type="button" class="button button-primary" id="eai-dry-run-trigger"><?php esc_html_e( 'Test Template (Dry Run)', 'enterprise-api-importer' ); ?></button>
+</p>
+</td>
 </tr>
 </tbody>
 </table>
@@ -959,6 +1160,266 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 <?php endif; ?>
 </div>
 <?php endif; ?>
+
+<div id="eai-dry-run-modal" class="eai-dry-run-modal" aria-hidden="true" style="display:none;">
+<div class="eai-dry-run-modal__backdrop" data-close="1"></div>
+<div class="eai-dry-run-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="eai-dry-run-modal-title">
+<div class="eai-dry-run-modal__header">
+<h2 id="eai-dry-run-modal-title"><?php esc_html_e( 'Template Dry Run Preview', 'enterprise-api-importer' ); ?></h2>
+<button type="button" class="button-link" id="eai-dry-run-close" aria-label="<?php esc_attr_e( 'Close preview', 'enterprise-api-importer' ); ?>">&times;</button>
+</div>
+
+<div class="eai-dry-run-tabs" role="tablist" aria-label="<?php esc_attr_e( 'Dry Run Preview Tabs', 'enterprise-api-importer' ); ?>">
+<button type="button" class="button button-secondary is-active" data-tab="data"><?php esc_html_e( 'Available Data Context', 'enterprise-api-importer' ); ?></button>
+<button type="button" class="button button-secondary" data-tab="preview"><?php esc_html_e( 'Rendered Preview', 'enterprise-api-importer' ); ?></button>
+</div>
+
+<div class="eai-dry-run-pane" data-pane="data">
+<pre><code id="eai-dry-run-raw-data"></code></pre>
+</div>
+
+<div class="eai-dry-run-pane" data-pane="preview" style="display:none;">
+<h3 id="eai-dry-run-rendered-title"></h3>
+<div id="eai-dry-run-rendered-body" class="eai-dry-run-rendered-body"></div>
+</div>
+</div>
+</div>
+
+<style>
+.eai-dry-run-modal {
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	align-items: center;
+	justify-content: center;
+}
+
+.eai-dry-run-modal__backdrop {
+	position: absolute;
+	inset: 0;
+	background: rgba(15, 23, 42, 0.6);
+	backdrop-filter: blur(2px);
+}
+
+.eai-dry-run-modal__dialog {
+	position: relative;
+	width: min(960px, 92vw);
+	max-height: 85vh;
+	overflow: auto;
+	background: #ffffff;
+	border-radius: 14px;
+	border: 1px solid #dbe3ec;
+	box-shadow: 0 18px 40px rgba(2, 6, 23, 0.2);
+	padding: 18px;
+}
+
+.eai-dry-run-modal__header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 10px;
+}
+
+.eai-dry-run-modal__header h2 {
+	margin: 0;
+}
+
+.eai-dry-run-tabs {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.eai-dry-run-tabs .is-active {
+	background: #0f172a;
+	color: #f8fafc;
+	border-color: #0f172a;
+}
+
+.eai-dry-run-pane pre {
+	background: #0b1220;
+	color: #e2e8f0;
+	padding: 12px;
+	border-radius: 8px;
+	overflow: auto;
+	max-height: 58vh;
+}
+
+.eai-dry-run-rendered-body {
+	border: 1px solid #dbe3ec;
+	border-radius: 8px;
+	padding: 14px;
+	background: #f8fafc;
+	max-height: 58vh;
+	overflow: auto;
+}
+
+@media (max-width: 782px) {
+	.eai-dry-run-modal__dialog {
+		width: 96vw;
+		max-height: 90vh;
+		padding: 12px;
+	}
+}
+</style>
+
+<script>
+( function() {
+	var config = <?php echo wp_json_encode( array( 'restUrl' => esc_url_raw( rest_url( 'eapi/v1/dry-run' ) ), 'nonce' => wp_create_nonce( 'wp_rest' ) ) ); ?>;
+	var trigger = document.getElementById( 'eai-dry-run-trigger' );
+	var errorNotice = document.getElementById( 'eai-dry-run-error' );
+	var modal = document.getElementById( 'eai-dry-run-modal' );
+	var closeButton = document.getElementById( 'eai-dry-run-close' );
+	var rawDataElement = document.getElementById( 'eai-dry-run-raw-data' );
+	var titleElement = document.getElementById( 'eai-dry-run-rendered-title' );
+	var bodyElement = document.getElementById( 'eai-dry-run-rendered-body' );
+	var tabButtons = modal ? modal.querySelectorAll( '[data-tab]' ) : [];
+	var tabPanes = modal ? modal.querySelectorAll( '[data-pane]' ) : [];
+
+	if ( ! trigger || ! errorNotice || ! modal || !closeButton || ! rawDataElement || ! titleElement || ! bodyElement ) {
+		return;
+	}
+
+	var setLoading = function( isLoading ) {
+		trigger.disabled = isLoading;
+		trigger.textContent = isLoading ? 'Fetching...' : 'Test Template (Dry Run)';
+	};
+
+	var showError = function( message ) {
+		errorNotice.textContent = message;
+		errorNotice.style.display = 'block';
+	};
+
+	var clearError = function() {
+		errorNotice.textContent = '';
+		errorNotice.style.display = 'none';
+	};
+
+	var openModal = function() {
+		modal.style.display = 'flex';
+		modal.setAttribute( 'aria-hidden', 'false' );
+	};
+
+	var closeModal = function() {
+		modal.style.display = 'none';
+		modal.setAttribute( 'aria-hidden', 'true' );
+	};
+
+	var activateTab = function( tabName ) {
+		Array.prototype.forEach.call( tabButtons, function( button ) {
+			button.classList.toggle( 'is-active', button.getAttribute( 'data-tab' ) === tabName );
+		} );
+
+		Array.prototype.forEach.call( tabPanes, function( pane ) {
+			pane.style.display = pane.getAttribute( 'data-pane' ) === tabName ? '' : 'none';
+		} );
+	};
+
+	Array.prototype.forEach.call( tabButtons, function( button ) {
+		button.addEventListener( 'click', function() {
+			activateTab( button.getAttribute( 'data-tab' ) );
+		} );
+	} );
+
+	modal.addEventListener( 'click', function( event ) {
+		var target = event.target;
+		if ( target && target.getAttribute( 'data-close' ) === '1' ) {
+			closeModal();
+		}
+	} );
+
+	closeButton.addEventListener( 'click', closeModal );
+
+	document.addEventListener( 'keydown', function( event ) {
+		if ( event.key === 'Escape' && modal.getAttribute( 'aria-hidden' ) === 'false' ) {
+			closeModal();
+		}
+	} );
+
+	trigger.addEventListener( 'click', function() {
+		clearError();
+		setLoading( true );
+
+		var apiUrlInput = document.getElementById( 'eai_import_endpoint_url' );
+		var authTokenInput = document.getElementById( 'eai_import_auth_token' );
+		var arrayPathInput = document.getElementById( 'eai_import_array_path' );
+		var titleTemplateInput = document.getElementById( 'eai_import_title_template' );
+		var bodyTemplateInput = document.getElementById( 'eai_import_mapping_template' );
+		var filterRows = document.querySelectorAll( '#eai-filter-rules-body tr' );
+
+		var rules = [];
+		Array.prototype.forEach.call( filterRows, function( row ) {
+			var keyInput = row.querySelector( 'input[name="filter_rules[key][]"]' );
+			var operatorInput = row.querySelector( 'select[name="filter_rules[operator][]"]' );
+			var valueInput = row.querySelector( 'input[name="filter_rules[value][]"]' );
+
+			var keyValue = keyInput ? keyInput.value.trim() : '';
+			if ( keyValue === '' ) {
+				return;
+			}
+
+			rules.push( {
+				key: keyValue,
+				operator: operatorInput ? operatorInput.value : 'equals',
+				value: valueInput ? valueInput.value : ''
+			} );
+		} );
+
+		var payload = {
+			api_url: apiUrlInput ? apiUrlInput.value.trim() : '',
+			title_template: titleTemplateInput ? titleTemplateInput.value : '',
+			body_template: bodyTemplateInput ? bodyTemplateInput.value : '',
+			auth_token: authTokenInput ? authTokenInput.value : '',
+			data_filters: {
+				array_path: arrayPathInput ? arrayPathInput.value.trim() : '',
+				rules: rules
+			}
+		};
+
+		fetch( config.restUrl, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-WP-Nonce': config.nonce
+			},
+			body: JSON.stringify( payload )
+		} )
+			.then( function( response ) {
+				return response.json().then( function( data ) {
+					return {
+						ok: response.ok,
+						data: data
+					};
+				} );
+			} )
+			.then( function( result ) {
+				if ( ! result.ok ) {
+					var message = result.data && result.data.message ? result.data.message : 'Dry run request failed.';
+					if ( result.data && result.data.code === 'eai_twig_render_error' ) {
+						var lineNumber = parseInt( result.data.line_number || 0, 10 );
+						if ( lineNumber > 0 ) {
+							message = 'Twig syntax error on line ' + lineNumber + ': ' + message;
+						}
+					}
+					showError( message );
+					return;
+				}
+
+				rawDataElement.textContent = JSON.stringify( result.data.raw_data || {}, null, 2 );
+				titleElement.textContent = result.data.rendered_title || '';
+				bodyElement.innerHTML = result.data.rendered_body || '';
+				activateTab( 'data' );
+				openModal();
+			} )
+			.catch( function() {
+				showError( 'Dry run request failed. Please try again.' );
+			} )
+			.finally( function() {
+				setLoading( false );
+			} );
+	} );
+} )();
+</script>
 </div>
 <?php
 }
