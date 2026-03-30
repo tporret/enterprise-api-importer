@@ -84,7 +84,7 @@ class EAI_Import_Processor {
 			return false;
 		}
 
-		$url_path = parse_url( $source_url, PHP_URL_PATH );
+		$url_path = wp_parse_url( $source_url, PHP_URL_PATH );
 		$file_name = is_string( $url_path ) ? basename( $url_path ) : '';
 
 		if ( '' === $file_name ) {
@@ -100,7 +100,7 @@ class EAI_Import_Processor {
 
 		if ( is_wp_error( $attachment_id ) ) {
 			if ( isset( $file_array['tmp_name'] ) && is_string( $file_array['tmp_name'] ) ) {
-				@unlink( $file_array['tmp_name'] );
+				wp_delete_file( $file_array['tmp_name'] );
 			}
 
 			self::log_media_error(
@@ -249,49 +249,43 @@ class EAI_Import_Processor {
 		$logs_deleted_total = 0;
 		$errors             = array();
 
-		$delete_temp_sql = $wpdb->prepare(
-			"DELETE FROM {$temp_table} WHERE is_processed = 1 OR created_at < ( UTC_TIMESTAMP() - INTERVAL 7 DAY ) LIMIT %d",
-			$chunk_size
-		);
+		do {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$temp_result  = $wpdb->query(
+				$wpdb->prepare(
+					'DELETE FROM %i WHERE is_processed = 1 OR created_at < ( UTC_TIMESTAMP() - INTERVAL 7 DAY ) LIMIT %d',
+					$temp_table,
+					$chunk_size
+				)
+			);
+			$temp_deleted = max( 0, (int) $wpdb->rows_affected );
 
-		if ( is_string( $delete_temp_sql ) && '' !== $delete_temp_sql ) {
-			do {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-				$temp_result  = $wpdb->query( $delete_temp_sql );
-				$temp_deleted = max( 0, (int) $wpdb->rows_affected );
+			if ( false === $temp_result ) {
+				$errors[] = 'Failed to purge records from custom_import_temp.';
+				break;
+			}
 
-				if ( false === $temp_result ) {
-					$errors[] = 'Failed to purge records from custom_import_temp.';
-					break;
-				}
+			$temp_deleted_total += $temp_deleted;
+		} while ( $temp_deleted > 0 );
 
-				$temp_deleted_total += $temp_deleted;
-			} while ( $temp_deleted > 0 );
-		} else {
-			$errors[] = 'Failed to prepare temp-table purge query.';
-		}
+		do {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$logs_result  = $wpdb->query(
+				$wpdb->prepare(
+					'DELETE FROM %i WHERE created_at < ( UTC_TIMESTAMP() - INTERVAL 30 DAY ) LIMIT %d',
+					$logs_table,
+					$chunk_size
+				)
+			);
+			$logs_deleted = max( 0, (int) $wpdb->rows_affected );
 
-		$delete_logs_sql = $wpdb->prepare(
-			"DELETE FROM {$logs_table} WHERE created_at < ( UTC_TIMESTAMP() - INTERVAL 30 DAY ) LIMIT %d",
-			$chunk_size
-		);
+			if ( false === $logs_result ) {
+				$errors[] = 'Failed to purge records from custom_import_logs.';
+				break;
+			}
 
-		if ( is_string( $delete_logs_sql ) && '' !== $delete_logs_sql ) {
-			do {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-				$logs_result  = $wpdb->query( $delete_logs_sql );
-				$logs_deleted = max( 0, (int) $wpdb->rows_affected );
-
-				if ( false === $logs_result ) {
-					$errors[] = 'Failed to purge records from custom_import_logs.';
-					break;
-				}
-
-				$logs_deleted_total += $logs_deleted;
-			} while ( $logs_deleted > 0 );
-		} else {
-			$errors[] = 'Failed to prepare logs-table purge query.';
-		}
+			$logs_deleted_total += $logs_deleted;
+		} while ( $logs_deleted > 0 );
 
 		return array(
 			'temp_deleted' => $temp_deleted_total,

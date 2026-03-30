@@ -1,6 +1,6 @@
 === Enterprise API Importer ===
 Contributors: tporret
-Tags: api, import, etl, json, cron, twig
+Tags: api, import, etl, json, cron
 Requires at least: 6.3
 Tested up to: 6.9
 Requires PHP: 8.1

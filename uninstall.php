@@ -20,11 +20,11 @@ $logs_table    = $wpdb->prefix . 'custom_import_logs';
 $temp_table    = $wpdb->prefix . 'custom_import_temp';
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( "DROP TABLE IF EXISTS `{$imports_table}`" );
+$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $imports_table ) );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( "DROP TABLE IF EXISTS `{$logs_table}`" );
+$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $logs_table ) );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( "DROP TABLE IF EXISTS `{$temp_table}`" );
+$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $temp_table ) );
 
 delete_option( 'eai_db_schema_version' );
 delete_option( 'eai_active_import_run' );

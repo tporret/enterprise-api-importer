@@ -1274,6 +1274,7 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 				'buttonLoading'    => __( 'Fetching...', 'enterprise-api-importer' ),
 				'requestFailed'    => __( 'Dry run request failed.', 'enterprise-api-importer' ),
 				'retryMessage'     => __( 'Dry run request failed. Please try again.', 'enterprise-api-importer' ),
+				/* translators: %d is the Twig template line number where the syntax error occurred. */
 				'twigErrorPrefix'  => __( 'Twig syntax error on line %d: ', 'enterprise-api-importer' ),
 			),
 		)
@@ -1647,7 +1648,11 @@ array(
 eai_handle_scheduled_import_batch();
 
 $notice_code = 'import_started';
-if ( isset( $_POST['eai_template_sync'] ) && '1' === (string) wp_unslash( $_POST['eai_template_sync'] ) ) {
+	$template_sync = isset( $_POST['eai_template_sync'] )
+		? sanitize_text_field( (string) wp_unslash( $_POST['eai_template_sync'] ) )
+		: '';
+
+	if ( '1' === $template_sync ) {
 	$notice_code = 'template_sync_started';
 }
 
