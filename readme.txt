@@ -24,6 +24,13 @@ Use Enterprise API Importer to run clean, repeatable import workflows without sa
 - Time-aware batch processing via WP-Cron to reduce timeout and memory-risk scenarios
 - Single-pane-of-glass Health and Schedules Dashboard for operational visibility
 - Secure media sideload helper foundation with source URL deduplication support
+- **[New] Enterprise-Grade Security Hardening:**
+  - Dedicated template management capability with multisite support
+  - Twig template security validation (disallowed tags, size/complexity limits, syntax checking)
+  - Template change audit logging with before/after hashes and actor metadata
+  - SSRF prevention via hostname and CIDR allowlisting with DNS resolution
+  - Twig strict variables mode enabled by default for better error visibility
+  - Imported items locked read-only (no editing, deletion, or quick-edit)
 
 Whether you import catalogs, directory records, listings, events, or custom business data, Enterprise API Importer provides a scalable framework for structured API-to-WordPress ETL.
 
@@ -33,6 +40,9 @@ Built for real-world production workflows:
 - Target post type safely falls back to post if invalid or unavailable
 - Attachment is excluded by default from target post type selection
 - Imports are staged and processed in queue batches for safer long-running jobs
+- Imported items are cryptographically linked to their origin import (read-only)
+- Template configuration changes are audit-logged with full actor context
+- Endpoints validated against configurable SSRF allowlists and HTTPS enforcement
 
 == Installation ==
 1. Upload the plugin folder to the /wp-content/plugins/ directory, or install it through the WordPress Plugins screen.
@@ -58,6 +68,21 @@ Yes. Select any public post type from Target Post Type. If the selected post typ
 = Does this import media attachments automatically from URL fields? =
 The plugin includes a secure media sideload helper foundation with source URL deduplication. Full field-level media mapping workflows can be added on top of this helper.
 
+= Who can edit imported items and templates? =
+Imported items are read-only (no editing, deletion allowed). Template configuration requires the `eai_manage_templates` capability or `manage_options` role. Multisite super admins always have access.
+
+= What Twig features are blocked for security? =
+The following Twig tags are disallowed to prevent file inclusion and code injection: `include`, `source`, `import`, `from`, `embed`, `extends`, `use`, `macro`.
+
+= Can I allow imports from internal/private networks? =
+Yes, but not recommended for production. Go to Settings → Allow Internal Endpoints to permit RFC1918 and loopback addresses. For whitelisting specific hosts/CIDR blocks, use Settings → Allowed Endpoint Hosts and Settings → Allowed Endpoint CIDR Blocks.
+
+= What should I configure in EAPI → Settings first? =
+Start with Allowed Endpoint Hosts and list only trusted API domains. Leave Allow Internal Endpoints disabled unless you intentionally import from internal services. Add CIDR blocks only when you need additional IP-range restrictions.
+
+= Where are template changes logged? =
+All template configuration changes are logged to the wp_custom_import_logs database table with before/after hashes, actor information, and precise timestamps. Review logs via EAPI → Manage Imports → Import edit screen.
+
 == External services ==
 This plugin connects to external APIs that you configure in each import job.
 
@@ -66,11 +91,15 @@ This plugin connects to external APIs that you configure in each import job.
 - When data is sent: During endpoint tests, dry-run template previews, and scheduled/manual import runs.
 - Why data is sent: To fetch remote JSON payloads for preview, transform, and import workflows.
 
-Security policy notes:
+**Security policy notes:**
 
 - Configure only trusted API endpoints that you control or explicitly trust.
-- Internal/private network hosts are blocked by default and can be enabled only through advanced plugin configuration/filtering for controlled environments.
-- HTTPS endpoints are required by default.
+- **HTTPS is required by default** for all endpoints (can be disabled via code filter for development).
+- **Private/internal network hosts are blocked by default** (RFC1918 ranges and loopback). Enable only if you need to import from internal APIs in controlled environments.
+- **Hostname allowlisting:** Restrict imports to specific domains (exact or wildcard subdomains). Configure at Settings → Allowed Endpoint Hosts.
+- **CIDR allowlisting:** Restrict imports to specific IPv4/IPv6 network ranges. Configure at Settings → Allowed Endpoint CIDR Blocks.
+- **Endpoint validation:** All endpoints are validated before request execution.
+- **Audit logging:** All endpoint changes and template modifications are logged with full actor context.
 
 The plugin does not hardcode any third-party API vendor. Data destination, terms, and privacy practices depend on the endpoint(s) you configure.
 
@@ -80,6 +109,29 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 3. API Connection and Data Filtering rules.
 
 == Changelog ==
+= 1.1.0 =
+* Enhanced Security Hardening (Enterprise-Grade)
+  - Added dedicated `eai_manage_templates` capability for template configuration access (separate from `manage_options`).
+  - Implemented multisite-aware permission system: `eai_manage_templates` OR `manage_options` OR `is_super_admin()`.
+  - Locked imported items as read-only (no editing, deletion, or quick-edit permissions via `map_meta_cap`).
+  - Added comprehensive Twig template security validator:
+    - Disallowed tags: include, source, import, from, embed, extends, use, macro (prevents SSTI and file inclusion).
+    - Size limits: 50 KB for mapping templates, 2 KB for title templates (filterable).
+    - Expression count limit: 250 default (filterable).
+    - Nesting depth limit: 12 levels default (filterable).
+    - Parse-time syntax validation via Twig tokenizer.
+  - Added template change audit logging:
+    - Logs to wp_custom_import_logs with before/after SHA256 hashes.
+    - Captures actor metadata (user login, role, display name).
+    - Tracks template lengths and create vs. update distinction.
+  - Implemented SSRF prevention via allowlist system:
+    - Hostname allowlisting (exact + wildcard *.example.com support).
+    - CIDR allowlisting (IPv4 and IPv6 support).
+    - DNS resolution for hostname validation.
+    - Settings UI for managing allowed hosts and CIDR blocks.
+  - Enabled Twig strict variables mode by default (prevents undefined variable silent rendering).
+  - Added Settings page (EAPI → Settings) for endpoint security configuration.
+
 = 1.0.0 =
 * Initial Release.
 * Added dynamic Twig Post Title Template support with sanitization and fallback logic.
@@ -88,5 +140,7 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.1.0 =
+Security hardening release: New dedicated capability system, Twig template security validation, audit logging, SSRF allowlisting, and read-only enforcement for imported items. See Settings for new endpoint allowlist configuration.
 = 1.0.0 =
 Initial stable release with enterprise ETL controls, Twig templating, dynamic post titles, and target post type support.

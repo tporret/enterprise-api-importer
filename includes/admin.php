@@ -10,13 +10,34 @@ exit;
 }
 
 /**
+ * Determines whether the current user can manage import configuration features.
+ *
+ * @return bool
+ */
+function eai_current_user_can_manage_imports() {
+if ( current_user_can( 'eai_manage_templates' ) || current_user_can( 'manage_options' ) ) {
+return true;
+}
+
+if ( is_multisite() && is_super_admin() ) {
+return true;
+}
+
+return false;
+}
+
+/**
  * Registers admin menu pages.
  */
 function eai_add_admin_pages() {
+if ( ! eai_current_user_can_manage_imports() ) {
+return;
+}
+
 add_menu_page(
 __( 'Enterprise API Importer', 'enterprise-api-importer' ),
 __( 'EAPI', 'enterprise-api-importer' ),
-'manage_options',
+'read',
 'eapi-manage',
 'eai_render_manage_imports_page',
 'dashicons-database-import',
@@ -27,7 +48,7 @@ add_submenu_page(
 'eapi-manage',
 __( 'Manage Imports', 'enterprise-api-importer' ),
 __( 'Manage Imports', 'enterprise-api-importer' ),
-'manage_options',
+'read',
 'eapi-manage',
 'eai_render_manage_imports_page'
 );
@@ -36,9 +57,18 @@ add_submenu_page(
 'eapi-manage',
 __( 'Schedules', 'enterprise-api-importer' ),
 __( 'Schedules', 'enterprise-api-importer' ),
-'manage_options',
+'read',
 'eapi-schedules',
 'eai_render_schedules_page'
+);
+
+add_submenu_page(
+	'eapi-manage',
+	__( 'Settings', 'enterprise-api-importer' ),
+	__( 'Settings', 'enterprise-api-importer' ),
+	'manage_options',
+	'eapi-settings',
+	'eai_render_settings_page'
 );
 }
 add_action( 'admin_menu', 'eai_add_admin_pages' );
@@ -47,11 +77,12 @@ add_action( 'admin_menu', 'eai_add_admin_pages' );
  * Registers admin post handlers.
  */
 function eai_register_admin_post_handlers() {
-add_action( 'admin_post_eai_save_import', 'eai_handle_save_import' );
-add_action( 'admin_post_eai_delete_import', 'eai_handle_delete_import' );
-add_action( 'admin_post_eai_run_import', 'eai_handle_manual_import_run' );
-add_action( 'admin_post_eai_test_import_endpoint', 'eai_handle_test_import_endpoint' );
-add_action( 'admin_post_eai_schedule_run_now', 'eai_handle_schedule_run_now_action' );
+	add_action( 'admin_post_eai_save_import', 'eai_handle_save_import' );
+	add_action( 'admin_post_eai_delete_import', 'eai_handle_delete_import' );
+	add_action( 'admin_post_eai_run_import', 'eai_handle_manual_import_run' );
+	add_action( 'admin_post_eai_test_import_endpoint', 'eai_handle_test_import_endpoint' );
+	add_action( 'admin_post_eai_schedule_run_now', 'eai_handle_schedule_run_now_action' );
+	add_action( 'admin_post_eai_save_settings', 'eai_handle_save_settings' );
 }
 add_action( 'admin_init', 'eai_register_admin_post_handlers' );
 
@@ -68,12 +99,148 @@ function eai_register_rest_routes() {
 			'methods'             => 'POST',
 			'callback'            => 'eai_rest_dry_run_template_preview',
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_options' );
+				return eai_current_user_can_manage_imports();
 			},
 		)
 	);
 }
 add_action( 'rest_api_init', 'eai_register_rest_routes' );
+
+/**
+ * Renders plugin settings page.
+ */
+function eai_render_settings_page() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'You are not allowed to access this page.', 'enterprise-api-importer' ) );
+	}
+
+	$settings = wp_parse_args( get_option( 'eai_settings', array() ), eai_get_default_settings() );
+	
+	// Ensure the settings array has the necessary keys
+	if ( ! is_array( $settings ) ) {
+		$settings = eai_get_default_settings();
+	}
+	
+	$hosts = isset( $settings['allowed_endpoint_hosts'] ) ? (string) $settings['allowed_endpoint_hosts'] : '';
+	$cidrs = isset( $settings['allowed_endpoint_cidrs'] ) ? (string) $settings['allowed_endpoint_cidrs'] : '';
+	$allow_internal = isset( $settings['allow_internal_endpoints'] ) ? (string) $settings['allow_internal_endpoints'] : '0';
+	?>
+	<div class="wrap">
+		<h1><?php esc_html_e( 'Enterprise API Importer Settings', 'enterprise-api-importer' ); ?></h1>
+		<?php eai_render_admin_notices(); ?>
+
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+			<input type="hidden" name="action" value="eai_save_settings" />
+			<?php wp_nonce_field( 'eai_save_settings', 'eai_settings_nonce' ); ?>
+
+			<table class="form-table" role="presentation">
+				<tbody>
+					<tr>
+						<th scope="row">
+							<label for="eai_allowed_endpoint_hosts">
+								<?php esc_html_e( 'Allowed Endpoint Hosts', 'enterprise-api-importer' ); ?>
+							</label>
+						</th>
+						<td>
+							<textarea
+								name="allowed_endpoint_hosts"
+								id="eai_allowed_endpoint_hosts"
+								rows="6"
+								class="large-text code"
+								placeholder="api.example.com&#10;*.internal.example.com"
+							><?php echo esc_textarea( $hosts ); ?></textarea>
+							<p class="description">
+								<?php esc_html_e( 'Comma or newline-separated list of allowed hostnames. Use *.example.com for wildcard subdomains. Leave empty to allow any HTTPS host.', 'enterprise-api-importer' ); ?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
+							<label for="eai_allowed_endpoint_cidrs">
+								<?php esc_html_e( 'Allowed Endpoint CIDR Blocks', 'enterprise-api-importer' ); ?>
+							</label>
+						</th>
+						<td>
+							<textarea
+								name="allowed_endpoint_cidrs"
+								id="eai_allowed_endpoint_cidrs"
+								rows="6"
+								class="large-text code"
+								placeholder="192.168.1.0/24&#10;10.0.0.0/8"
+							><?php echo esc_textarea( $cidrs ); ?></textarea>
+							<p class="description">
+								<?php esc_html_e( 'Comma or newline-separated list of CIDR blocks. Apply only when a corresponding hostname is in the allowed hosts list. Leave empty to disable CIDR-based filtering.', 'enterprise-api-importer' ); ?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
+							<?php esc_html_e( 'Allow Internal Endpoints', 'enterprise-api-importer' ); ?>
+						</th>
+						<td>
+							<label>
+								<input
+									type="checkbox"
+									name="allow_internal_endpoints"
+									value="1"
+									<?php checked( '1' === $allow_internal, true ); ?>
+								/>
+								<?php esc_html_e( 'Allow connections to private/internal IP addresses and localhost.', 'enterprise-api-importer' ); ?>
+							</label>
+							<p class="description">
+								<?php esc_html_e( 'For controlled/development environments only. Production should leave unchecked.', 'enterprise-api-importer' ); ?>
+							</p>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<?php submit_button( __( 'Save Settings', 'enterprise-api-importer' ) ); ?>
+		</form>
+	</div>
+	<?php
+}
+
+/**
+ * Handles plugin settings form submission.
+ */
+function eai_handle_save_settings() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'You are not allowed to perform this action.', 'enterprise-api-importer' ) );
+	}
+
+	if ( ! isset( $_POST['eai_settings_nonce'] ) ) {
+		wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-settings', 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+		exit;
+	}
+
+	check_admin_referer( 'eai_save_settings', 'eai_settings_nonce' );
+
+	$post_data = wp_unslash( $_POST );
+	$post_data = is_array( $post_data ) ? $post_data : array();
+
+	$allowed_endpoint_hosts = isset( $post_data['allowed_endpoint_hosts'] ) ? sanitize_textarea_field( (string) $post_data['allowed_endpoint_hosts'] ) : '';
+	$allowed_endpoint_cidrs = isset( $post_data['allowed_endpoint_cidrs'] ) ? sanitize_textarea_field( (string) $post_data['allowed_endpoint_cidrs'] ) : '';
+	$allow_internal_endpoints = ! empty( $post_data['allow_internal_endpoints'] ) && '1' === (string) $post_data['allow_internal_endpoints'] ? '1' : '0';
+
+	$current_settings = get_option( 'eai_settings', array() );
+	$current_settings = is_array( $current_settings ) ? $current_settings : array();
+	
+	$defaults = eai_get_default_settings();
+	$defaults = is_array( $defaults ) ? $defaults : array();
+	
+	$settings = wp_parse_args( $current_settings, $defaults );
+
+	$settings['allowed_endpoint_hosts'] = $allowed_endpoint_hosts;
+	$settings['allowed_endpoint_cidrs'] = $allowed_endpoint_cidrs;
+	$settings['allow_internal_endpoints'] = $allow_internal_endpoints;
+
+	$updated = update_option( 'eai_settings', $settings );
+
+	$redirect_url = add_query_arg( array( 'page' => 'eapi-settings', 'eai_notice' => 'settings_saved' ), admin_url( 'admin.php' ) );
+	wp_safe_redirect( $redirect_url );
+	exit;
+}
 
 /**
  * Executes a dry-run Twig preview against a live API response without persisting any data.
@@ -90,6 +257,28 @@ function eai_rest_dry_run_template_preview( WP_REST_Request $request ) {
 	$title_template = isset( $params['title_template'] ) ? (string) $params['title_template'] : '';
 	$body_template  = isset( $params['body_template'] ) ? (string) $params['body_template'] : '';
 	$auth_token     = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
+
+	$title_template_validation = eai_validate_twig_template_security( $title_template, 'title' );
+	if ( is_wp_error( $title_template_validation ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => $title_template_validation->get_error_code(),
+				'message' => $title_template_validation->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$body_template_validation = eai_validate_twig_template_security( $body_template, 'mapping' );
+	if ( is_wp_error( $body_template_validation ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => $body_template_validation->get_error_code(),
+				'message' => $body_template_validation->get_error_message(),
+			),
+			400
+		);
+	}
 
 	$validated_endpoint = eai_validate_remote_endpoint_url( $api_url );
 
@@ -258,36 +447,37 @@ $messages = array(
 'schedule_now'   => array( 'success', __( 'Import scheduled to run now.', 'enterprise-api-importer' ) ),
 'import_error'   => array( 'error', __( 'The import request failed. Please review your inputs and try again.', 'enterprise-api-importer' ) ),
 'schedule_error' => array( 'error', __( 'Unable to schedule this import right now.', 'enterprise-api-importer' ) ),
-);
+		'settings_saved' => array( 'success', __( 'Settings saved.', 'enterprise-api-importer' ) ),
+	);
 
-if ( ! isset( $messages[ $notice_code ] ) ) {
-return;
-}
+	if ( ! isset( $messages[ $notice_code ] ) ) {
+		return;
+	}
 
-$type    = $messages[ $notice_code ][0];
-$message = $messages[ $notice_code ][1];
-$class   = 'success' === $type ? 'notice notice-success is-dismissible' : 'notice notice-error';
+	list( $type, $message ) = $messages[ $notice_code ];
 
-echo '<div class="' . esc_attr( $class ) . '"><p>' . esc_html( $message ) . '</p></div>';
+	$class   = 'success' === $type ? 'notice notice-success is-dismissible' : 'notice notice-error';
+
+	echo '<div class="' . esc_attr( $class ) . '"><p>' . esc_html( $message ) . '</p></div>';
 }
 
 /**
  * Renders manage imports page.
  */
 function eai_render_manage_imports_page() {
-if ( ! current_user_can( 'manage_options' ) ) {
-return;
-}
+	if ( ! eai_current_user_can_manage_imports() ) {
+		return;
+	}
 
-// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only page routing state for admin screen rendering.
-$action = isset( $_GET['action'] ) ? sanitize_key( (string) wp_unslash( $_GET['action'] ) ) : '';
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only page routing state for admin screen rendering.
+	$action = isset( $_GET['action'] ) ? sanitize_key( (string) wp_unslash( $_GET['action'] ) ) : '';
 
-if ( 'edit' === $action ) {
-eai_render_import_edit_page();
-return;
-}
+	if ( 'edit' === $action ) {
+		eai_render_import_edit_page();
+		return;
+	}
 
-eai_render_imports_list_page();
+	eai_render_imports_list_page();
 }
 
 /**
@@ -613,7 +803,7 @@ return __( 'Unknown', 'enterprise-api-importer' );
  * Renders schedules dashboard page.
  */
 function eai_render_schedules_page() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 return;
 }
 
@@ -1431,7 +1621,7 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
  * Handles create/update import form submits.
  */
 function eai_handle_save_import() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 wp_die( esc_html__( 'You are not allowed to manage imports.', 'enterprise-api-importer' ) );
 }
 
@@ -1441,6 +1631,7 @@ $post_data = wp_unslash( $_POST );
 $post_data = is_array( $post_data ) ? $post_data : array();
 
 $import_id     = isset( $post_data['import_id'] ) ? absint( $post_data['import_id'] ) : 0;
+$previous_import = $import_id > 0 ? eai_db_get_import_config( $import_id ) : null;
 
 
 $name         = isset( $post_data['name'] ) ? sanitize_text_field( (string) $post_data['name'] ) : '';
@@ -1493,6 +1684,18 @@ $allowed_mapping_html = array(
 'a'      => array( 'href' => true, 'title' => true, 'target' => true, 'rel' => true ),
 );
 $mapping_template = wp_kses( (string) $template_raw, $allowed_mapping_html );
+
+$title_template_validation = eai_validate_twig_template_security( $title_template, 'title' );
+if ( is_wp_error( $title_template_validation ) ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
+
+$mapping_template_validation = eai_validate_twig_template_security( $mapping_template, 'mapping' );
+if ( is_wp_error( $mapping_template_validation ) ) {
+wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+exit;
+}
 
 $filter_operator_options = eai_get_filter_operator_options();
 $allowed_operators       = array_keys( $filter_operator_options );
@@ -1555,6 +1758,8 @@ if ( is_wp_error( $persisted_import_id ) ) {
 
 $import_id = (int) $persisted_import_id;
 
+eai_audit_template_configuration_change( $import_id, $previous_import, $data );
+
 $schedule_synced = eai_sync_import_recurrence_schedule( $import_id, $recurrence, $custom_interval_minutes );
 if ( ! $schedule_synced ) {
 wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
@@ -1566,10 +1771,68 @@ exit;
 }
 
 /**
+ * Writes audit entries when template fields are created or changed.
+ *
+ * @param int                       $import_id      Persisted import ID.
+ * @param array<string, mixed>|null $previous_import Previous saved import row.
+ * @param array<string, mixed>      $new_data       New import data payload.
+ * @return void
+ */
+function eai_audit_template_configuration_change( $import_id, $previous_import, $new_data ) {
+	$previous_import = is_array( $previous_import ) ? $previous_import : array();
+	$new_data        = is_array( $new_data ) ? $new_data : array();
+
+	$old_title   = isset( $previous_import['title_template'] ) ? (string) $previous_import['title_template'] : '';
+	$old_mapping = isset( $previous_import['mapping_template'] ) ? (string) $previous_import['mapping_template'] : '';
+	$new_title   = isset( $new_data['title_template'] ) ? (string) $new_data['title_template'] : '';
+	$new_mapping = isset( $new_data['mapping_template'] ) ? (string) $new_data['mapping_template'] : '';
+
+	$is_create = empty( $previous_import );
+	$is_change = $is_create || $old_title !== $new_title || $old_mapping !== $new_mapping;
+
+	if ( ! $is_change ) {
+		return;
+	}
+
+	$current_user = wp_get_current_user();
+	$actor_login  = $current_user instanceof WP_User ? (string) $current_user->user_login : '';
+	$actor_email  = $current_user instanceof WP_User ? (string) $current_user->user_email : '';
+
+	$details = array(
+		'audit_type'              => $is_create ? 'template_config_created' : 'template_config_updated',
+		'template_import_id'      => (int) $import_id,
+		'actor_user_id'           => get_current_user_id(),
+		'actor_user_login'        => $actor_login,
+		'actor_user_email'        => $actor_email,
+		'title_template_changed'  => $old_title !== $new_title,
+		'mapping_template_changed'=> $old_mapping !== $new_mapping,
+		'old_title_sha256'        => '' !== $old_title ? hash( 'sha256', $old_title ) : '',
+		'new_title_sha256'        => '' !== $new_title ? hash( 'sha256', $new_title ) : '',
+		'old_mapping_sha256'      => '' !== $old_mapping ? hash( 'sha256', $old_mapping ) : '',
+		'new_mapping_sha256'      => '' !== $new_mapping ? hash( 'sha256', $new_mapping ) : '',
+		'old_title_length'        => strlen( $old_title ),
+		'new_title_length'        => strlen( $new_title ),
+		'old_mapping_length'      => strlen( $old_mapping ),
+		'new_mapping_length'      => strlen( $new_mapping ),
+	);
+
+	eai_write_import_log(
+		0,
+		wp_generate_uuid4(),
+		'template_audit',
+		0,
+		0,
+		0,
+		$details,
+		gmdate( 'Y-m-d H:i:s', time() )
+	);
+}
+
+/**
  * Handles delete import action.
  */
 function eai_handle_delete_import() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 wp_die( esc_html__( 'You are not allowed to manage imports.', 'enterprise-api-importer' ) );
 }
 
@@ -1593,7 +1856,7 @@ exit;
  * Handles manual import execution for a specific import job.
  */
 function eai_handle_manual_import_run() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 wp_die( esc_html__( 'You are not allowed to run imports.', 'enterprise-api-importer' ) );
 }
 
@@ -1634,27 +1897,27 @@ array(
 )
 );
 
-// Process one slice immediately; remaining slices will self-schedule if needed.
-eai_handle_scheduled_import_batch();
+	// Process one slice immediately; remaining slices will self-schedule if needed.
+	eai_handle_scheduled_import_batch();
 
-$notice_code = 'import_started';
+	$notice_code = 'import_started';
 	$template_sync = isset( $_POST['eai_template_sync'] )
 		? sanitize_text_field( (string) wp_unslash( $_POST['eai_template_sync'] ) )
 		: '';
 
 	if ( '1' === $template_sync ) {
-	$notice_code = 'template_sync_started';
-}
+		$notice_code = 'template_sync_started';
+	}
 
-wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => $notice_code ), admin_url( 'admin.php' ) ) );
-exit;
+	wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => $notice_code ), admin_url( 'admin.php' ) ) );
+	exit;
 }
 
 /**
  * Handles endpoint test and payload preview for a specific import job.
  */
 function eai_handle_test_import_endpoint() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 wp_die( esc_html__( 'You are not allowed to test endpoints.', 'enterprise-api-importer' ) );
 }
 
@@ -1780,7 +2043,7 @@ exit;
  * Handles scheduling an immediate cron run for one import.
  */
 function eai_handle_schedule_run_now_action() {
-if ( ! current_user_can( 'manage_options' ) ) {
+if ( ! eai_current_user_can_manage_imports() ) {
 wp_die( esc_html__( 'You are not allowed to schedule imports.', 'enterprise-api-importer' ) );
 }
 

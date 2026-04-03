@@ -596,29 +596,20 @@ function eai_is_private_or_reserved_ip( $ip_address ) {
 }
 
 /**
- * Returns true when a host resolves to local/private/reserved networks.
+ * Resolves a hostname to a list of IPv4/IPv6 addresses.
  *
- * @param string $host Hostname or IP.
- *
- * @return bool
+ * @param string $host Hostname.
+ * @return string[]
  */
-function eai_is_disallowed_remote_host( $host ) {
+function eai_resolve_host_ips( $host ) {
 	$host = is_string( $host ) ? strtolower( trim( $host ) ) : '';
 
 	if ( '' === $host ) {
-		return true;
-	}
-
-	if ( in_array( $host, array( 'localhost', 'localhost.localdomain' ), true ) ) {
-		return true;
+		return array();
 	}
 
 	if ( false !== filter_var( $host, FILTER_VALIDATE_IP ) ) {
-		return eai_is_private_or_reserved_ip( $host );
-	}
-
-	if ( 0 === substr_count( $host, '.' ) || str_ends_with( $host, '.local' ) ) {
-		return true;
+		return array( $host );
 	}
 
 	$resolved_ips = array();
@@ -652,7 +643,36 @@ function eai_is_disallowed_remote_host( $host ) {
 		}
 	}
 
-	$resolved_ips = array_unique( array_filter( $resolved_ips, 'is_string' ) );
+	return array_values( array_unique( array_filter( $resolved_ips, 'is_string' ) ) );
+}
+
+/**
+ * Returns true when a host resolves to local/private/reserved networks.
+ *
+ * @param string $host Hostname or IP.
+ *
+ * @return bool
+ */
+function eai_is_disallowed_remote_host( $host ) {
+	$host = is_string( $host ) ? strtolower( trim( $host ) ) : '';
+
+	if ( '' === $host ) {
+		return true;
+	}
+
+	if ( in_array( $host, array( 'localhost', 'localhost.localdomain' ), true ) ) {
+		return true;
+	}
+
+	if ( false !== filter_var( $host, FILTER_VALIDATE_IP ) ) {
+		return eai_is_private_or_reserved_ip( $host );
+	}
+
+	if ( 0 === substr_count( $host, '.' ) || str_ends_with( $host, '.local' ) ) {
+		return true;
+	}
+
+	$resolved_ips = eai_resolve_host_ips( $host );
 
 	foreach ( $resolved_ips as $resolved_ip ) {
 		if ( eai_is_private_or_reserved_ip( $resolved_ip ) ) {
@@ -661,6 +681,102 @@ function eai_is_disallowed_remote_host( $host ) {
 	}
 
 	return false;
+}
+
+/**
+ * Normalizes comma/newline separated allowlist entries.
+ *
+ * @param mixed $raw_list Raw list string or array.
+ * @return string[]
+ */
+function eai_normalize_security_allowlist( $raw_list ) {
+	$entries = is_array( $raw_list ) ? $raw_list : preg_split( '/[\r\n,]+/', (string) $raw_list );
+	$entries = is_array( $entries ) ? $entries : array();
+
+	$normalized = array();
+	foreach ( $entries as $entry ) {
+		$entry = strtolower( trim( (string) $entry ) );
+		if ( '' !== $entry ) {
+			$normalized[] = $entry;
+		}
+	}
+
+	return array_values( array_unique( $normalized ) );
+}
+
+/**
+ * Returns true when host matches an allowlist rule.
+ *
+ * Supports exact host and wildcard prefix rules (for example *.example.com).
+ *
+ * @param string $host Hostname.
+ * @param string $rule Allowlist rule.
+ * @return bool
+ */
+function eai_host_matches_allow_rule( $host, $rule ) {
+	$host = strtolower( trim( (string) $host ) );
+	$rule = strtolower( trim( (string) $rule ) );
+
+	if ( '' === $host || '' === $rule ) {
+		return false;
+	}
+
+	if ( 0 === strpos( $rule, '*.' ) ) {
+		$base = substr( $rule, 2 );
+		if ( '' === $base ) {
+			return false;
+		}
+
+		return $host === $base || str_ends_with( $host, '.' . $base );
+	}
+
+	return $host === $rule;
+}
+
+/**
+ * Checks whether an IP matches a CIDR block.
+ *
+ * @param string $ip   IP address.
+ * @param string $cidr CIDR block.
+ * @return bool
+ */
+function eai_ip_matches_cidr( $ip, $cidr ) {
+	$ip   = trim( (string) $ip );
+	$cidr = trim( (string) $cidr );
+
+	if ( '' === $ip || '' === $cidr || false === strpos( $cidr, '/' ) ) {
+		return false;
+	}
+
+	list( $network, $prefix ) = array_pad( explode( '/', $cidr, 2 ), 2, '' );
+	$prefix = (int) $prefix;
+
+	$ip_bin      = @inet_pton( $ip );
+	$network_bin = @inet_pton( $network );
+
+	if ( false === $ip_bin || false === $network_bin || strlen( $ip_bin ) !== strlen( $network_bin ) ) {
+		return false;
+	}
+
+	$max_bits = 8 * strlen( $ip_bin );
+	if ( $prefix < 0 || $prefix > $max_bits ) {
+		return false;
+	}
+
+	$full_bytes = (int) floor( $prefix / 8 );
+	$extra_bits = $prefix % 8;
+
+	if ( $full_bytes > 0 && substr( $ip_bin, 0, $full_bytes ) !== substr( $network_bin, 0, $full_bytes ) ) {
+		return false;
+	}
+
+	if ( 0 === $extra_bits ) {
+		return true;
+	}
+
+	$mask = ( 0xFF << ( 8 - $extra_bits ) ) & 0xFF;
+
+	return ( ord( $ip_bin[ $full_bytes ] ) & $mask ) === ( ord( $network_bin[ $full_bytes ] ) & $mask );
 }
 
 /**
@@ -684,7 +800,9 @@ function eai_validate_remote_endpoint_url( $endpoint ) {
 
 	$require_https = (bool) apply_filters( 'eai_require_https_endpoints', true, $endpoint );
 	$scheme        = wp_parse_url( $endpoint, PHP_URL_SCHEME );
+	$host          = wp_parse_url( $endpoint, PHP_URL_HOST );
 	$scheme        = is_string( $scheme ) ? strtolower( $scheme ) : '';
+	$host          = is_string( $host ) ? strtolower( trim( $host ) ) : '';
 
 	if ( $require_https && 'https' !== $scheme ) {
 		return new WP_Error(
@@ -693,10 +811,61 @@ function eai_validate_remote_endpoint_url( $endpoint ) {
 		);
 	}
 
-	if ( ! $allow_internal_endpoints ) {
-		$host = wp_parse_url( $endpoint, PHP_URL_HOST );
-		$host = is_string( $host ) ? $host : '';
+	$allowed_hosts = eai_normalize_security_allowlist(
+		apply_filters(
+			'eai_allowed_endpoint_hosts',
+			isset( $settings['allowed_endpoint_hosts'] ) ? $settings['allowed_endpoint_hosts'] : array(),
+			$endpoint
+		)
+	);
 
+	if ( ! empty( $allowed_hosts ) ) {
+		$host_match = false;
+		foreach ( $allowed_hosts as $allowed_host ) {
+			if ( eai_host_matches_allow_rule( $host, $allowed_host ) ) {
+				$host_match = true;
+				break;
+			}
+		}
+
+		if ( ! $host_match ) {
+			return new WP_Error(
+				'eai_endpoint_not_in_allowed_hosts',
+				__( 'Endpoint host is not in the configured host allowlist.', 'enterprise-api-importer' )
+			);
+		}
+	}
+
+	$allowed_cidrs = eai_normalize_security_allowlist(
+		apply_filters(
+			'eai_allowed_endpoint_cidrs',
+			isset( $settings['allowed_endpoint_cidrs'] ) ? $settings['allowed_endpoint_cidrs'] : array(),
+			$endpoint
+		)
+	);
+
+	if ( ! empty( $allowed_cidrs ) ) {
+		$resolved_ips = eai_resolve_host_ips( $host );
+		$cidr_match   = false;
+
+		foreach ( $resolved_ips as $resolved_ip ) {
+			foreach ( $allowed_cidrs as $allowed_cidr ) {
+				if ( eai_ip_matches_cidr( $resolved_ip, $allowed_cidr ) ) {
+					$cidr_match = true;
+					break 2;
+				}
+			}
+		}
+
+		if ( ! $cidr_match ) {
+			return new WP_Error(
+				'eai_endpoint_not_in_allowed_cidrs',
+				__( 'Endpoint IP is not in the configured CIDR allowlist.', 'enterprise-api-importer' )
+			);
+		}
+	}
+
+	if ( ! $allow_internal_endpoints ) {
 		if ( eai_is_disallowed_remote_host( $host ) ) {
 			return new WP_Error(
 				'eai_endpoint_disallowed_host',
@@ -1453,12 +1622,14 @@ function eai_get_twig_environment() {
 		);
 	}
 
+	$strict_variables = (bool) apply_filters( 'eai_twig_strict_variables', true );
+
 	$loader = new \Twig\Loader\ArrayLoader( array() );
 	$twig   = new \Twig\Environment(
 		$loader,
 		array(
 			'autoescape'       => false,
-			'strict_variables' => false,
+			'strict_variables' => $strict_variables,
 			'cache'            => false,
 		)
 	);
@@ -1510,6 +1681,88 @@ function eai_get_twig_environment() {
 }
 
 /**
+ * Validates template size, complexity, and Twig syntax safety.
+ *
+ * @param string $template Template string.
+ * @param string $type     Template type (title|mapping).
+ * @return true|WP_Error
+ */
+function eai_validate_twig_template_security( $template, $type = 'mapping' ) {
+	$template = (string) $template;
+	$type     = in_array( $type, array( 'title', 'mapping' ), true ) ? $type : 'mapping';
+
+	$max_bytes_default = 'title' === $type ? 2048 : 50000;
+	$max_bytes         = (int) apply_filters( 'eai_template_max_bytes', $max_bytes_default, $type );
+	$template_size     = strlen( $template );
+
+	if ( $max_bytes > 0 && $template_size > $max_bytes ) {
+		return new WP_Error(
+			'eai_template_too_large',
+			sprintf(
+				/* translators: %1$d is current bytes, %2$d is max bytes. */
+				__( 'Template is too large (%1$d bytes). Maximum allowed is %2$d bytes.', 'enterprise-api-importer' ),
+				$template_size,
+				$max_bytes
+			)
+		);
+	}
+
+	$max_expressions = (int) apply_filters( 'eai_template_max_expressions', 250, $type );
+	$expression_count = substr_count( $template, '{{' ) + substr_count( $template, '{%' );
+	if ( $max_expressions > 0 && $expression_count > $max_expressions ) {
+		return new WP_Error( 'eai_template_too_complex', __( 'Template has too many Twig expressions.', 'enterprise-api-importer' ) );
+	}
+
+	$disallowed_tag_pattern = '/\{\%\s*(include|source|import|from|embed|extends|use|macro)\b/i';
+	if ( 1 === preg_match( $disallowed_tag_pattern, $template ) ) {
+		return new WP_Error( 'eai_template_disallowed_tag', __( 'Template uses disallowed Twig tags.', 'enterprise-api-importer' ) );
+	}
+
+	$max_nesting = (int) apply_filters( 'eai_template_max_nesting_depth', 12, $type );
+	$tokens      = array();
+	$token_match = preg_match_all( '/\{\%\s*(if|for|endif|endfor)\b[^%]*\%\}/i', $template, $tokens );
+	$depth       = 0;
+	$max_seen    = 0;
+
+	if ( false !== $token_match && ! empty( $tokens[1] ) ) {
+		foreach ( $tokens[1] as $token ) {
+			$token = strtolower( (string) $token );
+			if ( 'if' === $token || 'for' === $token ) {
+				++$depth;
+				$max_seen = max( $max_seen, $depth );
+			} elseif ( 'endif' === $token || 'endfor' === $token ) {
+				$depth = max( 0, $depth - 1 );
+			}
+		}
+	}
+
+	if ( $max_nesting > 0 && $max_seen > $max_nesting ) {
+		return new WP_Error( 'eai_template_excessive_nesting', __( 'Template nesting depth is too high.', 'enterprise-api-importer' ) );
+	}
+
+	$twig = eai_get_twig_environment();
+	if ( is_wp_error( $twig ) ) {
+		return $twig;
+	}
+
+	try {
+		$source = new \Twig\Source( $template, 'eai-validate-' . $type );
+		$twig->parse( $twig->tokenize( $source ) );
+	} catch ( \Twig\Error\Error $error ) {
+		return new WP_Error(
+			'eai_template_syntax_error',
+			sprintf(
+				/* translators: %s is the Twig exception message. */
+				__( 'Twig template syntax error: %s', 'enterprise-api-importer' ),
+				sanitize_text_field( $error->getMessage() )
+			)
+		);
+	}
+
+	return true;
+}
+
+/**
  * Renders mapping template content for a single item using Twig.
  *
  * @param array<string, mixed> $item             Item payload.
@@ -1526,6 +1779,11 @@ function eai_render_mapping_template_for_item( $item, $mapping_template = null )
 
 	if ( '' === (string) $mapping_template ) {
 		return new WP_Error( 'eai_missing_mapping_template', __( 'Mapping Template is not configured.', 'enterprise-api-importer' ) );
+	}
+
+	$template_security = eai_validate_twig_template_security( (string) $mapping_template, 'mapping' );
+	if ( is_wp_error( $template_security ) ) {
+		return $template_security;
 	}
 
 	$twig = eai_get_twig_environment();

@@ -14,6 +14,19 @@ if ( ! defined( 'EAI_DB_SCHEMA_VERSION' ) ) {
 }
 
 /**
+ * Ensures template-management capability exists for administrators.
+ *
+ * @return void
+ */
+function eai_sync_template_management_capabilities() {
+	$admin_role = get_role( 'administrator' );
+
+	if ( $admin_role instanceof WP_Role ) {
+		$admin_role->add_cap( 'eai_manage_templates' );
+	}
+}
+
+/**
  * Runs on plugin activation.
  *
  * Creates and migrates ETL tables required by the import pipeline.
@@ -80,6 +93,8 @@ function eai_activate_plugin() {
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
 
+	eai_sync_template_management_capabilities();
+
 	if ( false === wp_next_scheduled( 'eapi_daily_garbage_collection' ) ) {
 		wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'eapi_daily_garbage_collection' );
 	}
@@ -104,6 +119,8 @@ function eai_deactivate_plugin() {
  * @return void
  */
 function eai_maybe_upgrade_schema() {
+	eai_sync_template_management_capabilities();
+
 	$installed_version = (string) get_option( 'eai_db_schema_version', '' );
 
 	if ( EAI_DB_SCHEMA_VERSION === $installed_version ) {
@@ -123,5 +140,7 @@ function eai_get_default_settings() {
 		'cron_initial_delay_seconds'   => '5',
 		'cron_batch_delay_seconds'     => '15',
 		'allow_internal_endpoints'     => '0',
+		'allowed_endpoint_hosts'       => '',
+		'allowed_endpoint_cidrs'       => '',
 	);
 }
