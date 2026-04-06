@@ -70,7 +70,133 @@ Design goals:
 
 Note: this helper is now implemented and available for integration into your field mapping/media ingestion strategy.
 
-### 4) Enhanced Security Hardening (5-Layer Defense)
+### 4) Enterprise Reporting Engine & Dashboard (Tableau-Style)
+
+A pluggable, high-performance reporting aggregator with real-time operational metrics and a React-based UI.
+
+#### Architecture Overview
+
+**Three-Tier Design:**
+
+1. **Reporter Base Class** (`EAPI_Reporter_Base`)
+   - Abstract base with transient-backed caching (600s TTL default)
+   - Formatting helpers: `format_percentage()`, `format_time_ago()`, `get_status_color()`
+   - Each reporter implements `calculate_metrics(): array` for domain logic
+
+2. **Singleton Aggregator** (`EAPI_Reporting_Aggregator`)
+   - Registry pattern for reporter instances
+   - `register_reporter( EAPI_Reporter_Base $reporter )`
+   - `get_dashboard_data()` returns nested array grouped by category (Health, Security, Performance)
+
+3. **Nine Metric Modules (Out of the Box)**
+   - **Environment Health:**
+     - `Cron_Heartbeat`: Checks recurring import schedules vs `wp_next_scheduled()`
+     - `Queue_Depth`: Counts unprocessed staging rows (with color-coded thresholds)
+     - `Daily_Success_Rate`: Success/error ratio from last 24h logs
+   - **Security & Compliance:**
+     - `SSRF_Hardening`: Tests if endpoint allowlist is configured
+     - `Audit_Integrity`: Counts template change audit entries (7 days)
+     - `Protocol_Enforcement`: HTTPS vs HTTP endpoint ratio
+   - **Connectivity & Performance:**
+     - `API_Latency`: Average processing time from last 100 runs (with sparkline)
+     - `Active_Connections`: Distinct endpoint URL count
+     - `Throughput`: Total rows processed in last 60 minutes
+
+#### REST API Routes
+
+**Get aggregated metrics:**
+```
+GET /wp-json/eapi/v1/dashboard
+```
+Returns nested structure grouped by category and reporter ID.
+
+```json
+{
+  "Health": {
+    "daily_success_rate": {
+      "label": "Daily Success Rate",
+      "metrics": { "status": "green", "value": "98.5%", "detail": "..." }
+    }
+  },
+  "Security": { ... },
+  "Performance": { ... }
+}
+```
+
+**Get time-series history (for charts and feeds):**
+```
+GET /wp-json/eapi/v1/dashboard/history
+```
+Returns sparkline data, latency charts, audit entries, and throughput trends (600s cache).
+
+**Force refresh (flush transients):**
+```
+GET /wp-json/eapi/v1/dashboard?refresh=1
+```
+
+#### React Dashboard UI
+
+**Components:**
+- `Dashboard.js` – Main layout router with header, KPIs, 3-column grid, footer
+- `StatCard.js` – KPI card with Lucide icon + Recharts sparkline (7-day trend)
+- `StatusList.js` – Health checks with icons + progress bars
+- `SecurityDonut.js` – Interactive donut chart (Recharts) with hover legends
+- `LatencyChart.js` – Area chart for latency timeline
+- `AuditMarquee.js` – Scrolling marquee of last 5 audit events
+
+**Tech Stack:**
+- React (via `@wordpress/element`)
+- Recharts (SVG data viz)
+- Lucide React (icons)
+- Tailwind CSS (scoped with `eapi-` prefix to avoid wp-admin collisions)
+- `@wordpress/api-fetch` for REST communication
+
+**Menu Location:** `EAPI → Dashboard` (requires `read` capability)
+
+#### Extending the Reporting System
+
+**Add a custom reporter:**
+
+```php
+class My_Custom_Reporter extends EAPI_Reporter_Base {
+  protected string $id = 'my_metric';
+  protected string $category = 'Performance';
+  protected string $label = 'My Custom KPI';
+  
+  protected function calculate_metrics(): array {
+    global $wpdb;
+    
+    // Your DB query logic here
+    $count = $wpdb->get_var( ... );
+    
+    return array(
+      'status' => $this->get_status_color( $count, array( 'green' => 10, 'yellow' => 50 ) ),
+      'value'  => number_format_i18n( $count ),
+      'detail' => 'Custom metric explanation.',
+    );
+  }
+}
+
+// Register on init
+add_action( 'init', function() {
+  $aggregator = EAPI_Reporting_Aggregator::get_instance();
+  $aggregator->register_reporter( new My_Custom_Reporter() );
+}, 20 ); // Run after eai_init_reporting (priority 10)
+```
+
+**Customize thresholds:**
+
+All status-to-color logic uses `get_status_color( $value, ['green' => X, 'yellow' => Y] )` for consistent UX.
+
+**Clear reporting cache:**
+
+```php
+eai_flush_reporting_transients(); // Clears all 9 reporter transients + history
+```
+
+**Monitoring via WP-Cron:** All metrics are calculated on-demand and cached, so no background jobs required. Transient eviction is natural.
+
+### 5) Enhanced Security Hardening (5-Layer Defense)
 
 #### ✅ Dedicated Template Management Capability
 

@@ -1,0 +1,54 @@
+<?php
+/**
+ * Bootstraps the reporting subsystem — loads classes and registers all reporters.
+ *
+ * @package Enterprise_API_Importer
+ * @since   1.1.0
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Initialise the reporting engine and register all metric modules.
+ */
+function eai_init_reporting() {
+	$dir = __DIR__;
+
+	// Core classes.
+	require_once $dir . '/class-eapi-reporter-base.php';
+	require_once $dir . '/class-eapi-reporting-aggregator.php';
+
+	// Reporter modules.
+	require_once $dir . '/reporters/class-eapi-reporter-cron-heartbeat.php';
+	require_once $dir . '/reporters/class-eapi-reporter-queue-depth.php';
+	require_once $dir . '/reporters/class-eapi-reporter-daily-success-rate.php';
+	require_once $dir . '/reporters/class-eapi-reporter-ssrf-hardening.php';
+	require_once $dir . '/reporters/class-eapi-reporter-audit-integrity.php';
+	require_once $dir . '/reporters/class-eapi-reporter-protocol-enforcement.php';
+	require_once $dir . '/reporters/class-eapi-reporter-api-latency.php';
+	require_once $dir . '/reporters/class-eapi-reporter-active-connections.php';
+	require_once $dir . '/reporters/class-eapi-reporter-throughput.php';
+
+	$aggregator = EAPI_Reporting_Aggregator::get_instance();
+
+	// Environment Health.
+	$aggregator->register_reporter( new EAPI_Reporter_Cron_Heartbeat() );
+	$aggregator->register_reporter( new EAPI_Reporter_Queue_Depth() );
+	$aggregator->register_reporter( new EAPI_Reporter_Daily_Success_Rate() );
+
+	// Security & Compliance.
+	$aggregator->register_reporter( new EAPI_Reporter_SSRF_Hardening() );
+	$aggregator->register_reporter( new EAPI_Reporter_Audit_Integrity() );
+	$aggregator->register_reporter( new EAPI_Reporter_Protocol_Enforcement() );
+
+	// Connectivity & Performance.
+	$aggregator->register_reporter( new EAPI_Reporter_API_Latency() );
+	$aggregator->register_reporter( new EAPI_Reporter_Active_Connections() );
+	$aggregator->register_reporter( new EAPI_Reporter_Throughput() );
+
+	// REST endpoint for dashboard data.
+	require_once $dir . '/rest-dashboard.php';
+}
+add_action( 'init', 'eai_init_reporting' );

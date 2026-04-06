@@ -70,6 +70,15 @@ add_submenu_page(
 	'eapi-settings',
 	'eai_render_settings_page'
 );
+
+add_submenu_page(
+	'eapi-manage',
+	__( 'Dashboard', 'enterprise-api-importer' ),
+	__( 'Dashboard', 'enterprise-api-importer' ),
+	'read',
+	'eapi-dashboard',
+	'eai_render_dashboard_page'
+);
 }
 add_action( 'admin_menu', 'eai_add_admin_pages' );
 
@@ -2075,3 +2084,56 @@ admin_url( 'admin.php' )
 );
 exit;
 }
+
+/**
+ * Renders the React dashboard page.
+ */
+function eai_render_dashboard_page() {
+	if ( ! eai_current_user_can_manage_imports() ) {
+		wp_die( esc_html__( 'You are not allowed to access this page.', 'enterprise-api-importer' ) );
+	}
+	echo '<div id="eapi-dashboard-root" class="wrap"></div>';
+}
+
+/**
+ * Enqueue dashboard assets on the dashboard admin page only.
+ *
+ * @param string $hook_suffix Current admin page hook suffix.
+ */
+function eai_enqueue_dashboard_assets( string $hook_suffix ): void {
+	if ( 'eapi_page_eapi-dashboard' !== $hook_suffix ) {
+		return;
+	}
+
+	$asset_file = plugin_dir_path( __DIR__ ) . 'build/dashboard.asset.php';
+	if ( ! file_exists( $asset_file ) ) {
+		return;
+	}
+
+	$asset = require $asset_file;
+
+	wp_enqueue_script(
+		'eapi-dashboard',
+		plugins_url( 'build/dashboard.js', __DIR__ ),
+		$asset['dependencies'],
+		$asset['version'],
+		true
+	);
+
+	wp_enqueue_style(
+		'eapi-dashboard',
+		plugins_url( 'build/style-dashboard.css', __DIR__ ),
+		array(),
+		$asset['version']
+	);
+
+	wp_localize_script(
+		'eapi-dashboard',
+		'eapiDashboard',
+		array(
+			'restUrl' => esc_url_raw( rest_url( 'eapi/v1/dashboard' ) ),
+			'nonce'   => wp_create_nonce( 'wp_rest' ),
+		)
+	);
+}
+add_action( 'admin_enqueue_scripts', 'eai_enqueue_dashboard_assets' );
