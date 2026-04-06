@@ -168,7 +168,7 @@ class EAI_Import_Processor {
 				continue;
 			}
 
-			$src_host = wp_parse_url( $src, PHP_URL_HOST );	
+			$src_host = wp_parse_url( $src, PHP_URL_HOST );
 			$src_host = is_string( $src_host ) ? strtolower( $src_host ) : '';
 
 			if ( '' === $src_host || ( '' !== $site_host && $src_host === $site_host ) ) {
@@ -1150,7 +1150,7 @@ function eai_apply_filter_rules_to_records( $selected_array, $filter_rules ) {
 		$passes_all_rules = true;
 		foreach ( $filter_rules as $filter_rule ) {
 			$record_value = eai_get_item_value_by_path( $record, $filter_rule['key'] );
-			if ( ! evaluate_filter_rule( $record_value, $filter_rule['operator'], $filter_rule['value'] ) ) {
+			if ( ! eai_evaluate_filter_rule( $record_value, $filter_rule['operator'], $filter_rule['value'] ) ) {
 				$passes_all_rules = false;
 				break;
 			}
@@ -1181,7 +1181,7 @@ function eai_apply_filter_rules_to_records( $selected_array, $filter_rules ) {
  *
  * @return bool
  */
-function evaluate_filter_rule( $record_value, $operator, $filter_value ) {
+function eai_evaluate_filter_rule( $record_value, $operator, $filter_value ) {
 	$operator = sanitize_key( (string) $operator );
 
 	$record_is_empty = null === $record_value;
@@ -1499,6 +1499,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 		update_post_meta( $insert_post_id, '_my_custom_api_id', $external_id );
 		update_post_meta( $insert_post_id, '_eai_import_id', $import_id );
 		update_post_meta( $insert_post_id, '_last_synced_timestamp', $timestamp );
+		eai_save_item_meta_with_manifest( $insert_post_id, $item, $import_id );
 
 		return array(
 			'action'  => 'inserted',
@@ -1528,6 +1529,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 		}
 
 		update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+		eai_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 
 		return array(
 			'action'  => 'updated',
@@ -1549,6 +1551,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 		}
 
 		update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+		eai_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 
 		return array(
 			'action'  => 'updated',
@@ -1558,11 +1561,269 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 
 	// Touch sync timestamp even when content and title are unchanged so valid items are not treated as orphans.
 	update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+	eai_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 
 	return array(
 		'action'  => 'unchanged',
 		'post_id' => $existing_post_id,
 	);
+}
+
+/**
+ * Save API item data as post meta and generate the manifest of array keys.
+ *
+ * Loops through each field in the raw API item, saves it as post meta
+ * (prefixed with `_eapi_`), and tracks which keys contain array/object
+ * values. Writes `_eapi_import_job_id`, `_eapi_manifest_array_keys`,
+ * and `_eapi_field_schema` so the Block Designer companion plugin can
+ * discover loop-able data, render human-readable labels, and auto-map
+ * fields to block bindings without scanning wp_postmeta.
+ *
+ * @param int                  $post_id   The WordPress post ID.
+ * @param array<string, mixed> $item      The raw API record.
+ * @param int                  $import_id The import job ID.
+ */
+function eai_save_item_meta_with_manifest( $post_id, $item, $import_id ) {
+	if ( ! is_array( $item ) || empty( $item ) ) {
+		return;
+	}
+
+	$post_id   = absint( $post_id );
+	$import_id = absint( $import_id );
+
+	if ( 0 === $post_id ) {
+		return;
+	}
+
+	$meta_input      = array();
+	$eapi_array_keys = array();
+	$array_key_map   = array();
+
+	foreach ( $item as $key => $value ) {
+		if ( ! is_string( $key ) || '' === $key ) {
+			continue;
+		}
+
+		$meta_key = '_eapi_' . sanitize_key( $key );
+
+		// Track keys whose values are arrays or objects (loop-able data).
+		if ( is_array( $value ) || is_object( $value ) ) {
+			$eapi_array_keys[]           = $meta_key;
+			$array_key_map[ $meta_key ]  = $key;
+		}
+
+		$meta_input[ $meta_key ] = $value;
+	}
+
+	// Save each meta field.
+	foreach ( $meta_input as $meta_key => $meta_value ) {
+		update_post_meta( $post_id, $meta_key, $meta_value );
+	}
+
+	// Save the import job ID for cross-plugin verification.
+	update_post_meta( $post_id, '_eapi_import_job_id', $import_id );
+
+	// Save the manifest of array meta keys.
+	update_post_meta( $post_id, '_eapi_manifest_array_keys', array_unique( $eapi_array_keys ) );
+
+	// Generate field schema once per import job per PHP request, then write to each post.
+	static $schema_cache = array();
+
+	if ( ! empty( $array_key_map ) && ! isset( $schema_cache[ $import_id ] ) ) {
+		$schema_cache[ $import_id ] = eai_build_field_schema_for_item( $item, $array_key_map );
+	}
+
+	$field_schema = isset( $schema_cache[ $import_id ] ) ? $schema_cache[ $import_id ] : array();
+
+	if ( ! empty( $field_schema ) ) {
+		update_post_meta( $post_id, '_eapi_field_schema', $field_schema );
+	}
+}
+
+/**
+ * Builds a field schema describing each array-type dataset in an API item.
+ *
+ * For every meta key in `$eapi_array_keys`, samples the first child record
+ * and infers type/role/label for each scalar field. The result is a schema
+ * the Block Designer companion plugin can use for binding dropdowns,
+ * auto-mapping, and dataset selectors.
+ *
+ * @param array<string, mixed>  $item          Raw API record.
+ * @param array<string, string> $array_key_map Mapping of meta key to original API key.
+ *
+ * @return array<string, array<string, mixed>> Schema keyed by meta key.
+ */
+function eai_build_field_schema_for_item( $item, $array_key_map ) {
+	$schema = array();
+
+	foreach ( $array_key_map as $meta_key => $original_key ) {
+		if ( ! isset( $item[ $original_key ] ) || ! is_array( $item[ $original_key ] ) ) {
+			continue;
+		}
+
+		$array_value   = $item[ $original_key ];
+		$dataset_label = eai_humanize_field_name( $original_key );
+
+		// Find a representative sample record.
+		$sample = null;
+
+		if ( eai_array_is_list( $array_value ) ) {
+			foreach ( $array_value as $candidate ) {
+				if ( is_array( $candidate ) && ! empty( $candidate ) ) {
+					$sample = $candidate;
+					break;
+				}
+			}
+		} else {
+			$sample = $array_value;
+		}
+
+		if ( ! is_array( $sample ) || empty( $sample ) ) {
+			continue;
+		}
+
+		$fields = array();
+
+		foreach ( $sample as $field_key => $field_value ) {
+			if ( ! is_string( $field_key ) || '' === $field_key ) {
+				continue;
+			}
+
+			// Skip nested arrays/objects; they would be their own dataset.
+			if ( is_array( $field_value ) || is_object( $field_value ) ) {
+				continue;
+			}
+
+			$type = eai_infer_field_type( $field_value );
+			$role = eai_infer_field_role( $field_key, $type );
+
+			$fields[ $field_key ] = array(
+				'label' => eai_humanize_field_name( $field_key ),
+				'type'  => $type,
+				'role'  => $role,
+			);
+		}
+
+		if ( ! empty( $fields ) ) {
+			$schema[ $meta_key ] = array(
+				'label'  => $dataset_label,
+				'fields' => $fields,
+			);
+		}
+	}
+
+	return $schema;
+}
+
+/**
+ * Infers a field type from a sample value.
+ *
+ * @param mixed $value Sample field value.
+ *
+ * @return string One of: string, number, date, url, html, boolean.
+ */
+function eai_infer_field_type( $value ) {
+	if ( is_bool( $value ) ) {
+		return 'boolean';
+	}
+
+	if ( is_int( $value ) || is_float( $value ) ) {
+		return 'number';
+	}
+
+	if ( ! is_string( $value ) ) {
+		return 'string';
+	}
+
+	$trimmed = trim( $value );
+
+	if ( '' === $trimmed ) {
+		return 'string';
+	}
+
+	if ( is_numeric( $trimmed ) ) {
+		return 'number';
+	}
+
+	if ( in_array( strtolower( $trimmed ), array( 'true', 'false' ), true ) ) {
+		return 'boolean';
+	}
+
+	if ( false !== filter_var( $trimmed, FILTER_VALIDATE_URL ) ) {
+		return 'url';
+	}
+
+	if ( $trimmed !== wp_strip_all_tags( $trimmed ) ) {
+		return 'html';
+	}
+
+	if ( 1 === preg_match( '/\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2}/', $trimmed ) && false !== strtotime( $trimmed ) ) {
+		return 'date';
+	}
+
+	return 'string';
+}
+
+/**
+ * Infers a semantic role from a field name and its detected type.
+ *
+ * Roles let the Block Designer auto-wire fields to block bindings:
+ * title → heading, date → paragraph, url → link href, image → image src, etc.
+ *
+ * @param string $field_name Original API field name.
+ * @param string $field_type Inferred field type from eai_infer_field_type().
+ *
+ * @return string|null Semantic role or null when no role can be inferred.
+ */
+function eai_infer_field_role( $field_name, $field_type ) {
+	$lower = strtolower( $field_name );
+
+	if ( 'id' === $lower || 1 === preg_match( '/(^|[_\-])id$|(?<=[a-z])Id$/i', $field_name ) ) {
+		return 'id';
+	}
+
+	if ( 1 === preg_match( '/title|(?<![a-z])name(?![a-z])|heading/i', $field_name ) ) {
+		return 'title';
+	}
+
+	if ( 1 === preg_match( '/desc|summary|body|content|abstract|excerpt/i', $field_name ) ) {
+		return 'description';
+	}
+
+	if ( 1 === preg_match( '/image|photo|thumbnail|avatar|logo|picture|icon/i', $field_name ) ) {
+		return 'image';
+	}
+
+	if ( 'date' === $field_type || 1 === preg_match( '/date|(?<![a-z])time(?![a-z])|created|updated|published|started|ended/i', $field_name ) ) {
+		return 'date';
+	}
+
+	if ( 'url' === $field_type || 1 === preg_match( '/url|link|href|deeplink|permalink/i', $field_name ) ) {
+		return 'url';
+	}
+
+	if ( 1 === preg_match( '/location|address|city|state|zip|postal|country|latitude|longitude/i', $field_name ) ) {
+		return 'location';
+	}
+
+	return null;
+}
+
+/**
+ * Converts an API field name into a human-readable label.
+ *
+ * Handles camelCase, snake_case, and kebab-case conventions.
+ *
+ * @param string $field_name Original API field name.
+ *
+ * @return string Human-readable label.
+ */
+function eai_humanize_field_name( $field_name ) {
+	$label = preg_replace( '/([a-z])([A-Z])/', '$1 $2', $field_name );
+	$label = is_string( $label ) ? $label : $field_name;
+	$label = str_replace( array( '_', '-' ), ' ', $label );
+
+	return ucwords( trim( $label ) );
 }
 
 /**
@@ -2234,7 +2495,7 @@ function eai_normalize_staged_items( $decoded_items ) {
 		return $items;
 	}
 
-	if ( isset( $decoded_items['id'] ) ) {
+	if ( ! empty( $decoded_items ) ) {
 		$items[] = $decoded_items;
 	}
 
