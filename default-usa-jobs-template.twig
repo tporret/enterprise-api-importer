@@ -1,0 +1,41 @@
+{#
+  Per-item template for Enterprise API Importer.
+  Expected JSON Array Path: SearchResult.SearchResultItems
+  Each render receives one item, so data == one SearchResultItems entry.
+#}
+
+{% set job = data.MatchedObjectDescriptor %}
+
+<h2>
+  <a href="{{ job.PositionURI }}" target="_blank" rel="noopener">
+    {{ job.PositionTitle }}
+  </a>
+</h2>
+
+<p>{{ job.OrganizationName }} - {{ job.DepartmentName }}</p>
+<p>{{ job.PositionLocationDisplay }}</p>
+<p>Position ID: {{ job.PositionID }}</p>
+
+{% if job.PositionSchedule is not empty %}
+  <p>Schedule: {{ job.PositionSchedule | map(p => p.Name) | join(', ') }}</p>
+{% endif %}
+
+{% if job.PositionOfferingType is not empty %}
+  <p>Type: {{ job.PositionOfferingType | map(p => p.Name) | join(', ') }}</p>
+{% endif %}
+
+{% if job.PositionRemuneration is not empty %}
+  {% set pay = job.PositionRemuneration[0] %}
+  <p>
+    Salary: {{ pay.MinimumRange | number_format }} - {{ pay.MaximumRange | number_format }} {{ pay.Description }}
+  </p>
+{% endif %}
+
+{% if job.ApplyURI is not empty %}
+  <p><a href="{{ job.ApplyURI[0] }}" target="_blank" rel="noopener">Apply on USAJobs</a></p>
+{% endif %}
+
+<p>
+  Opened: {{ job.PublicationStartDate | date('F j, Y') }}<br>
+  Closes: {{ job.ApplicationCloseDate | date('F j, Y') }}
+</p>

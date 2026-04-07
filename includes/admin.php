@@ -266,6 +266,10 @@ function eai_rest_dry_run_template_preview( WP_REST_Request $request ) {
 	$title_template = isset( $params['title_template'] ) ? (string) $params['title_template'] : '';
 	$body_template  = isset( $params['body_template'] ) ? (string) $params['body_template'] : '';
 	$auth_token     = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
+	$auth_method    = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
+	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
+	$auth_username  = isset( $params['auth_username'] ) ? sanitize_text_field( (string) $params['auth_username'] ) : '';
+	$auth_password  = isset( $params['auth_password'] ) ? (string) $params['auth_password'] : '';
 
 	$title_template_validation = eai_validate_twig_template_security( $title_template, 'title' );
 	if ( is_wp_error( $title_template_validation ) ) {
@@ -303,7 +307,7 @@ function eai_rest_dry_run_template_preview( WP_REST_Request $request ) {
 
 	$response = wp_remote_get(
 		$api_url,
-		eai_get_remote_request_args( $auth_token, 30 )
+		eai_get_remote_request_args( $auth_method, $auth_token, $auth_header_name, $auth_username, $auth_password )
 	);
 
 	if ( is_wp_error( $response ) ) {
@@ -468,6 +472,14 @@ $messages = array(
 	$class   = 'success' === $type ? 'notice notice-success is-dismissible' : 'notice notice-error';
 
 	echo '<div class="' . esc_attr( $class ) . '"><p>' . esc_html( $message ) . '</p></div>';
+
+	if ( 'import_error' === $notice_code ) {
+		$save_error = get_transient( 'eai_last_import_save_error' );
+		if ( is_string( $save_error ) && '' !== $save_error ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( $save_error ) . '</p></div>';
+			delete_transient( 'eai_last_import_save_error' );
+		}
+	}
 }
 
 /**
@@ -934,18 +946,22 @@ if ( $import_id > 0 ) {
 }
 
 $defaults = array(
-'id'               => 0,
-'name'             => '',
-'endpoint_url'     => '',
-'auth_token'       => '',
-'array_path'       => '',
-		'unique_id_path'   => 'id',
-'recurrence'       => 'off',
-'custom_interval_minutes' => 30,
-'filter_rules'     => '[]',
-'target_post_type' => 'post',
-'title_template'   => '',
-'mapping_template' => '',
+	'id'               => 0,
+	'name'             => '',
+	'endpoint_url'     => '',
+	'auth_method'      => 'none',
+	'auth_token'       => '',
+	'auth_header_name' => '',
+	'auth_username'    => '',
+	'auth_password'    => '',
+	'array_path'       => '',
+	'unique_id_path'   => 'id',
+	'recurrence'       => 'off',
+	'custom_interval_minutes' => 30,
+	'filter_rules'     => '[]',
+	'target_post_type' => 'post',
+	'title_template'   => '',
+	'mapping_template' => '',
 );
 $import = is_array( $import_row ) ? wp_parse_args( $import_row, $defaults ) : $defaults;
 $import['custom_interval_minutes'] = absint( $import['custom_interval_minutes'] );
@@ -1037,10 +1053,48 @@ $is_edit = (int) $import['id'] > 0;
 <td><input name="endpoint_url" type="url" id="eai_import_endpoint_url" class="large-text" value="<?php echo esc_attr( (string) $import['endpoint_url'] ); ?>" required /></td>
 </tr>
 <tr>
-<th scope="row"><label for="eai_import_auth_token"><?php esc_html_e( 'Bearer Token', 'enterprise-api-importer' ); ?></label></th>
+<th scope="row"><label for="eai_import_auth_method"><?php esc_html_e( 'Authentication Method', 'enterprise-api-importer' ); ?></label></th>
 <td>
-<input name="auth_token" type="password" id="eai_import_auth_token" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_token'] ); ?>" autocomplete="new-password" />
-<p class="description"><?php esc_html_e( 'Leave blank only if your endpoint does not require bearer authentication.', 'enterprise-api-importer' ); ?></p>
+<select name="auth_method" id="eai_import_auth_method">
+<option value="none" <?php selected( (string) $import['auth_method'], 'none' ); ?>><?php esc_html_e( 'None', 'enterprise-api-importer' ); ?></option>
+<option value="bearer" <?php selected( (string) $import['auth_method'], 'bearer' ); ?>><?php esc_html_e( 'Bearer Token', 'enterprise-api-importer' ); ?></option>
+<option value="api_key_custom" <?php selected( (string) $import['auth_method'], 'api_key_custom' ); ?>><?php esc_html_e( 'API Key (Custom Header)', 'enterprise-api-importer' ); ?></option>
+<option value="basic_auth" <?php selected( (string) $import['auth_method'], 'basic_auth' ); ?>><?php esc_html_e( 'Basic Auth', 'enterprise-api-importer' ); ?></option>
+</select>
+<p class="description"><?php esc_html_e( 'Select the authentication method required by your API endpoint.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr class="eai-auth-field eai-auth-bearer" style="display:none;">
+<th scope="row"><label for="eai_import_auth_token_bearer"><?php esc_html_e( 'Bearer Token', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_token" type="password" id="eai_import_auth_token_bearer" class="regular-text" value="<?php echo esc_attr( 'bearer' === (string) $import['auth_method'] ? (string) $import['auth_token'] : '' ); ?>" autocomplete="new-password" />
+<p class="description"><?php esc_html_e( 'OAuth or API bearer token sent as Authorization: Bearer <token>.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr class="eai-auth-field eai-auth-api_key_custom" style="display:none;">
+<th scope="row"><label for="eai_import_auth_header_name"><?php esc_html_e( 'Header Name', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_header_name" type="text" id="eai_import_auth_header_name" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_header_name'] ); ?>" placeholder="Authorization-Key" />
+<p class="description"><?php esc_html_e( 'Custom HTTP header name, e.g. Authorization-Key, X-API-Key.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr class="eai-auth-field eai-auth-api_key_custom" style="display:none;">
+<th scope="row"><label for="eai_import_auth_token_apikey"><?php esc_html_e( 'API Key', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_token_apikey" type="password" id="eai_import_auth_token_apikey" class="regular-text" value="<?php echo esc_attr( 'api_key_custom' === (string) $import['auth_method'] ? (string) $import['auth_token'] : '' ); ?>" autocomplete="new-password" />
+<p class="description"><?php esc_html_e( 'The API key value sent in the custom header above.', 'enterprise-api-importer' ); ?></p>
+</td>
+</tr>
+<tr class="eai-auth-field eai-auth-basic_auth" style="display:none;">
+<th scope="row"><label for="eai_import_auth_username"><?php esc_html_e( 'Username', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_username" type="text" id="eai_import_auth_username" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_username'] ); ?>" autocomplete="off" />
+</td>
+</tr>
+<tr class="eai-auth-field eai-auth-basic_auth" style="display:none;">
+<th scope="row"><label for="eai_import_auth_password"><?php esc_html_e( 'Password', 'enterprise-api-importer' ); ?></label></th>
+<td>
+<input name="auth_password" type="password" id="eai_import_auth_password" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_password'] ); ?>" autocomplete="new-password" />
 </td>
 </tr>
 <tr>
@@ -1097,6 +1151,33 @@ $is_edit = (int) $import['id'] > 0;
 
 	recurrenceSelect.addEventListener( 'change', toggleCustomMinutes );
 	toggleCustomMinutes();
+} )();
+
+( function() {
+	var authMethodSelect = document.getElementById( 'eai_import_auth_method' );
+
+	if ( ! authMethodSelect ) {
+		return;
+	}
+
+	var toggleAuthFields = function() {
+		var method = authMethodSelect.value;
+		var allRows = document.querySelectorAll( '.eai-auth-field' );
+
+		Array.prototype.forEach.call( allRows, function( row ) {
+			row.style.display = 'none';
+		} );
+
+		if ( method && method !== 'none' ) {
+			var activeRows = document.querySelectorAll( '.eai-auth-' + method );
+			Array.prototype.forEach.call( activeRows, function( row ) {
+				row.style.display = 'table-row';
+			} );
+		}
+	};
+
+	authMethodSelect.addEventListener( 'change', toggleAuthFields );
+	toggleAuthFields();
 } )();
 </script>
 </td>
@@ -1543,11 +1624,24 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 		setLoading( true );
 
 		var apiUrlInput = document.getElementById( 'eai_import_endpoint_url' );
-		var authTokenInput = document.getElementById( 'eai_import_auth_token' );
+		var authMethodInput = document.getElementById( 'eai_import_auth_method' );
+		var authTokenBearerInput = document.getElementById( 'eai_import_auth_token_bearer' );
+		var authTokenApikeyInput = document.getElementById( 'eai_import_auth_token_apikey' );
+		var authHeaderNameInput = document.getElementById( 'eai_import_auth_header_name' );
+		var authUsernameInput = document.getElementById( 'eai_import_auth_username' );
+		var authPasswordInput = document.getElementById( 'eai_import_auth_password' );
 		var arrayPathInput = document.getElementById( 'eai_import_array_path' );
 		var titleTemplateInput = document.getElementById( 'eai_import_title_template' );
 		var bodyTemplateInput = document.getElementById( 'eai_import_mapping_template' );
 		var filterRows = document.querySelectorAll( '#eai-filter-rules-body tr' );
+
+		var currentMethod = authMethodInput ? authMethodInput.value : 'none';
+		var resolvedToken = '';
+		if ( currentMethod === 'bearer' ) {
+			resolvedToken = authTokenBearerInput ? authTokenBearerInput.value : '';
+		} else if ( currentMethod === 'api_key_custom' ) {
+			resolvedToken = authTokenApikeyInput ? authTokenApikeyInput.value : '';
+		}
 
 		var rules = [];
 		Array.prototype.forEach.call( filterRows, function( row ) {
@@ -1571,7 +1665,11 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 			api_url: apiUrlInput ? apiUrlInput.value.trim() : '',
 			title_template: titleTemplateInput ? titleTemplateInput.value : '',
 			body_template: bodyTemplateInput ? bodyTemplateInput.value : '',
-			auth_token: authTokenInput ? authTokenInput.value : '',
+			auth_method: currentMethod,
+			auth_token: resolvedToken,
+			auth_header_name: authHeaderNameInput ? authHeaderNameInput.value : '',
+			auth_username: authUsernameInput ? authUsernameInput.value : '',
+			auth_password: authPasswordInput ? authPasswordInput.value : '',
 			data_filters: {
 				array_path: arrayPathInput ? arrayPathInput.value.trim() : '',
 				rules: rules
@@ -1645,9 +1743,20 @@ $previous_import = $import_id > 0 ? eai_db_get_import_config( $import_id ) : nul
 
 $name         = isset( $post_data['name'] ) ? sanitize_text_field( (string) $post_data['name'] ) : '';
 $endpoint_url = isset( $post_data['endpoint_url'] ) ? esc_url_raw( trim( (string) $post_data['endpoint_url'] ) ) : '';
-$auth_token   = isset( $post_data['auth_token'] ) ? sanitize_text_field( (string) $post_data['auth_token'] ) : '';
+$auth_method  = isset( $post_data['auth_method'] ) ? sanitize_key( (string) $post_data['auth_method'] ) : 'none';
+$auth_header_name = isset( $post_data['auth_header_name'] ) ? sanitize_text_field( (string) $post_data['auth_header_name'] ) : '';
+$auth_username = isset( $post_data['auth_username'] ) ? sanitize_text_field( (string) $post_data['auth_username'] ) : '';
+$auth_password = isset( $post_data['auth_password'] ) ? (string) $post_data['auth_password'] : '';
+
+// Resolve the token value from the correct form field per method.
+$auth_token = '';
+if ( 'bearer' === $auth_method ) {
+	$auth_token = isset( $post_data['auth_token'] ) ? sanitize_text_field( (string) $post_data['auth_token'] ) : '';
+} elseif ( 'api_key_custom' === $auth_method ) {
+	$auth_token = isset( $post_data['auth_token_apikey'] ) ? sanitize_text_field( (string) $post_data['auth_token_apikey'] ) : '';
+}
 $array_path   = isset( $post_data['array_path'] ) ? sanitize_text_field( (string) $post_data['array_path'] ) : '';
-	$unique_id_path = isset( $post_data['unique_id_path'] ) ? sanitize_text_field( (string) $post_data['unique_id_path'] ) : 'id';
+$unique_id_path = isset( $post_data['unique_id_path'] ) ? sanitize_text_field( (string) $post_data['unique_id_path'] ) : 'id';
 $recurrence   = isset( $post_data['recurrence'] ) ? sanitize_key( (string) $post_data['recurrence'] ) : 'off';
 $custom_interval_minutes = isset( $post_data['custom_interval_minutes'] ) ? absint( $post_data['custom_interval_minutes'] ) : 0;
 $target_post_type = isset( $post_data['target_post_type'] ) ? sanitize_key( (string) $post_data['target_post_type'] ) : 'post';
@@ -1664,6 +1773,23 @@ $template_raw = isset( $post_data['mapping_template'] ) ? (string) $post_data['m
 $allowed_recurrence = array( 'off', 'hourly', 'twicedaily', 'daily', 'custom' );
 if ( ! in_array( $recurrence, $allowed_recurrence, true ) ) {
 $recurrence = 'off';
+}
+
+$allowed_auth_methods = array( 'none', 'bearer', 'api_key_custom', 'basic_auth' );
+if ( ! in_array( $auth_method, $allowed_auth_methods, true ) ) {
+	$auth_method = 'none';
+}
+
+// Clear fields that don't apply to the selected method.
+if ( 'api_key_custom' !== $auth_method ) {
+	$auth_header_name = '';
+}
+if ( 'bearer' !== $auth_method && 'api_key_custom' !== $auth_method ) {
+	$auth_token = '';
+}
+if ( 'basic_auth' !== $auth_method ) {
+	$auth_username = '';
+	$auth_password = '';
 }
 
 if ( 'custom' === $recurrence ) {
@@ -1745,22 +1871,27 @@ exit;
 }
 
 $data = array(
-'name'             => $name,
-'endpoint_url'     => $endpoint_url,
-'auth_token'       => $auth_token,
-'array_path'       => $array_path,
-		'unique_id_path'   => $unique_id_path,
-'recurrence'       => $recurrence,
-'custom_interval_minutes' => $custom_interval_minutes,
-'filter_rules'     => (string) $filter_rules_json,
-'target_post_type' => $target_post_type,
-'title_template'   => $title_template,
-'mapping_template' => $mapping_template,
+	'name'             => $name,
+	'endpoint_url'     => $endpoint_url,
+	'auth_method'      => $auth_method,
+	'auth_token'       => $auth_token,
+	'auth_header_name' => $auth_header_name,
+	'auth_username'    => $auth_username,
+	'auth_password'    => $auth_password,
+	'array_path'       => $array_path,
+	'unique_id_path'   => $unique_id_path,
+	'recurrence'       => $recurrence,
+	'custom_interval_minutes' => $custom_interval_minutes,
+	'filter_rules'     => (string) $filter_rules_json,
+	'target_post_type' => $target_post_type,
+	'title_template'   => $title_template,
+	'mapping_template' => $mapping_template,
 );
-	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' );
+$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' );
 
 $persisted_import_id = eai_db_save_import_config( $import_id, $data, $formats );
 if ( is_wp_error( $persisted_import_id ) ) {
+	set_transient( 'eai_last_import_save_error', $persisted_import_id->get_error_message(), 5 * MINUTE_IN_SECONDS );
 	wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
 	exit;
 }
@@ -1963,17 +2094,21 @@ exit;
 }
 
 $endpoint = trim( (string) $import_job['endpoint_url'] );
-$token    = trim( (string) $import_job['auth_token'] );
+$auth_method      = trim( (string) ( $import_job['auth_method'] ?? 'none' ) );
+$token             = trim( (string) $import_job['auth_token'] );
+$auth_header_name  = trim( (string) ( $import_job['auth_header_name'] ?? '' ) );
+$auth_username     = trim( (string) ( $import_job['auth_username'] ?? '' ) );
+$auth_password     = (string) ( $import_job['auth_password'] ?? '' );
 $json_path = trim( (string) $import_job['array_path'] );
 
 if ( '' === $endpoint ) {
-$preview_result['message'] = __( 'No endpoint URL available to test.', 'enterprise-api-importer' );
-set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
-wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
-exit;
+	$preview_result['message'] = __( 'No endpoint URL available to test.', 'enterprise-api-importer' );
+	set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
+	wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id ), admin_url( 'admin.php' ) ) );
+	exit;
 }
 
-$response = eai_fetch_api_payload( $endpoint, $token, true );
+$response = eai_fetch_api_payload( $endpoint, $auth_method, $token, $auth_header_name, $auth_username, $auth_password, true );
 if ( is_wp_error( $response ) ) {
 $preview_result['message'] = $response->get_error_message();
 set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );

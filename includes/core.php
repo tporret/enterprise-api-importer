@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'EAI_DB_SCHEMA_VERSION' ) ) {
-	define( 'EAI_DB_SCHEMA_VERSION', '20260329-5' );
+	define( 'EAI_DB_SCHEMA_VERSION', '20260406-3' );
 }
 
 /**
@@ -46,7 +46,11 @@ function eai_activate_plugin() {
 		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 		name varchar(191) NOT NULL,
 		endpoint_url text NOT NULL,
+		auth_method varchar(50) NOT NULL DEFAULT 'none',
 		auth_token text NOT NULL,
+		auth_header_name varchar(191) NOT NULL DEFAULT '',
+		auth_username varchar(191) NOT NULL DEFAULT '',
+		auth_password text NOT NULL DEFAULT '',
 		array_path varchar(191) NOT NULL DEFAULT '',
 		unique_id_path varchar(191) NOT NULL DEFAULT 'id',
 		recurrence varchar(32) NOT NULL DEFAULT 'off',
@@ -92,6 +96,7 @@ function eai_activate_plugin() {
 	dbDelta( $sql_imports );
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
+	eai_ensure_imports_auth_columns();
 
 	eai_sync_template_management_capabilities();
 
@@ -100,6 +105,73 @@ function eai_activate_plugin() {
 	}
 
 	update_option( 'eai_db_schema_version', EAI_DB_SCHEMA_VERSION );
+}
+
+/**
+ * Ensures auth-related columns exist on the imports table.
+ *
+ * Handles migration from the legacy auth_header_type column to the new
+ * auth_method column, and adds auth_username / auth_password columns.
+ *
+ * @return void
+ */
+function eai_ensure_imports_auth_columns() {
+	global $wpdb;
+
+	$table = $wpdb->prefix . 'eapi_imports';
+
+	// Migrate legacy auth_header_type → auth_method.
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$legacy_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_header_type' ) );
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$method_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_method' ) );
+
+	if ( null !== $legacy_col && null === $method_col ) {
+		// Add the new column first.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_method varchar(50) NOT NULL DEFAULT 'none' AFTER endpoint_url", $table ) );
+
+		// Map legacy values → new values.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'bearer' WHERE auth_header_type = 'bearer'", $table ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'api_key_custom', auth_header_name = 'Authorization-Key' WHERE auth_header_type = 'api-key' AND ( auth_header_name = '' OR auth_header_name IS NULL )", $table ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'api_key_custom' WHERE auth_header_type = 'api-key-header'", $table ) );
+
+		// Drop legacy column.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( 'ALTER TABLE %i DROP COLUMN auth_header_type', $table ) );
+	} elseif ( null === $method_col ) {
+		// Fresh install without legacy column — just add auth_method.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_method varchar(50) NOT NULL DEFAULT 'none' AFTER endpoint_url", $table ) );
+	}
+
+	// Ensure auth_header_name exists.
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$header_name_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_header_name' ) );
+	if ( null === $header_name_col ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_header_name varchar(191) NOT NULL DEFAULT '' AFTER auth_token", $table ) );
+	}
+
+	// Ensure auth_username exists.
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$username_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_username' ) );
+	if ( null === $username_col ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_username varchar(191) NOT NULL DEFAULT '' AFTER auth_header_name", $table ) );
+	}
+
+	// Ensure auth_password exists.
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$password_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_password' ) );
+	if ( null === $password_col ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_password text NOT NULL DEFAULT '' AFTER auth_username", $table ) );
+	}
 }
 
 /**
@@ -120,6 +192,7 @@ function eai_deactivate_plugin() {
  */
 function eai_maybe_upgrade_schema() {
 	eai_sync_template_management_capabilities();
+	eai_ensure_imports_auth_columns();
 
 	$installed_version = (string) get_option( 'eai_db_schema_version', '' );
 

@@ -94,7 +94,7 @@ function eai_db_get_import_configs(): array {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$rows = $wpdb->get_results(
 		$wpdb->prepare(
-			"SELECT id, name, endpoint_url, auth_token, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, title_template, mapping_template, created_at
+			"SELECT id, name, endpoint_url, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, title_template, mapping_template, created_at
 			FROM %i
 			ORDER BY id DESC",
 			$table
@@ -137,7 +137,7 @@ function eai_db_get_import_config( int $import_id ): ?array {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$row = $wpdb->get_row(
 		$wpdb->prepare(
-			"SELECT id, name, endpoint_url, auth_token, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, title_template, mapping_template, created_at
+			"SELECT id, name, endpoint_url, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, title_template, mapping_template, created_at
 			FROM %i
 			WHERE id = %d",
 			$table,
@@ -219,7 +219,17 @@ function eai_db_save_import_config( int $import_id, array $data, array $formats 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$updated = $wpdb->update( $table, $data, array( 'id' => $import_id ), $formats, array( '%d' ) );
 		if ( false === $updated ) {
-			return new WP_Error( 'eai_import_update_failed', __( 'Failed to update import configuration.', 'enterprise-api-importer' ) );
+			$last_error = is_string( $wpdb->last_error ) ? trim( $wpdb->last_error ) : '';
+			$message    = __( 'Failed to update import configuration.', 'enterprise-api-importer' );
+			if ( '' !== $last_error ) {
+				$message .= ' ' . sprintf(
+					/* translators: %s is the SQL/database error message. */
+					__( 'Database error: %s', 'enterprise-api-importer' ),
+					$last_error
+				);
+			}
+
+			return new WP_Error( 'eai_import_update_failed', $message );
 		}
 
 		eai_db_invalidate_imports_cache( $import_id );
@@ -234,7 +244,17 @@ function eai_db_save_import_config( int $import_id, array $data, array $formats 
 	);
 
 	if ( false === $inserted ) {
-		return new WP_Error( 'eai_import_insert_failed', __( 'Failed to create import configuration.', 'enterprise-api-importer' ) );
+		$last_error = is_string( $wpdb->last_error ) ? trim( $wpdb->last_error ) : '';
+		$message    = __( 'Failed to create import configuration.', 'enterprise-api-importer' );
+		if ( '' !== $last_error ) {
+			$message .= ' ' . sprintf(
+				/* translators: %s is the SQL/database error message. */
+				__( 'Database error: %s', 'enterprise-api-importer' ),
+				$last_error
+			);
+		}
+
+		return new WP_Error( 'eai_import_insert_failed', $message );
 	}
 
 	$new_import_id = (int) $wpdb->insert_id;

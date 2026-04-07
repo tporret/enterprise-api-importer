@@ -880,18 +880,52 @@ function eai_validate_remote_endpoint_url( $endpoint ) {
 /**
  * Builds hardened default arguments for remote endpoint requests.
  *
- * @param string $token   Optional bearer token.
- * @param int    $timeout Request timeout seconds.
+ * Supports four authentication methods:
+ * - 'none':           No authentication headers
+ * - 'bearer':         Standard OAuth Bearer token (Authorization: Bearer <token>)
+ * - 'api_key_custom': Custom header name with API key value
+ * - 'basic_auth':     HTTP Basic Auth (Authorization: Basic base64(user:pass))
+ *
+ * @param string $auth_method      Authentication method.
+ * @param string $token            Token / API key value (bearer and api_key_custom).
+ * @param string $auth_header_name Custom header name (api_key_custom only).
+ * @param string $auth_username    Username (basic_auth only).
+ * @param string $auth_password    Password (basic_auth only).
+ * @param int    $timeout          Request timeout seconds.
  *
  * @return array<string, mixed>
  */
-function eai_get_remote_request_args( $token = '', $timeout = 30 ) {
+function eai_get_remote_request_args( $auth_method = 'none', $token = '', $auth_header_name = '', $auth_username = '', $auth_password = '', $timeout = 30 ) {
 	$headers = array(
 		'Accept' => 'application/json',
 	);
 
-	if ( '' !== $token ) {
-		$headers['Authorization'] = 'Bearer ' . $token;
+	$auth_method = sanitize_key( (string) $auth_method );
+
+	switch ( $auth_method ) {
+		case 'bearer':
+			if ( '' !== $token ) {
+				$headers['Authorization'] = 'Bearer ' . $token;
+			}
+			break;
+
+		case 'api_key_custom':
+			if ( '' !== $token && '' !== $auth_header_name ) {
+				$headers[ $auth_header_name ] = $token;
+			}
+			break;
+
+		case 'basic_auth':
+			if ( '' !== $auth_username ) {
+				// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Required for HTTP Basic Auth per RFC 7617.
+				$headers['Authorization'] = 'Basic ' . base64_encode( $auth_username . ':' . $auth_password );
+			}
+			break;
+
+		case 'none':
+		default:
+			// No authentication headers.
+			break;
 	}
 
 	$args = array(
@@ -907,13 +941,17 @@ function eai_get_remote_request_args( $token = '', $timeout = 30 ) {
 /**
  * Fetches API payload with optional transient caching.
  *
- * @param string $endpoint     Endpoint URL.
- * @param string $token        Bearer token, optional.
- * @param bool   $bypass_cache Whether to bypass cache and force a live call.
+ * @param string $endpoint        Endpoint URL.
+ * @param string $auth_method     Authentication method.
+ * @param string $token           Token / API key value.
+ * @param string $auth_header_name Custom header name (api_key_custom only).
+ * @param string $auth_username   Username (basic_auth only).
+ * @param string $auth_password   Password (basic_auth only).
+ * @param bool   $bypass_cache    Whether to bypass cache and force a live call.
  *
  * @return array<string, mixed>|WP_Error
  */
-function eai_fetch_api_payload( $endpoint, $token = '', $bypass_cache = false ) {
+function eai_fetch_api_payload( $endpoint, $auth_method = 'none', $token = '', $auth_header_name = '', $auth_username = '', $auth_password = '', $bypass_cache = false ) {
 	$validated_endpoint = eai_validate_remote_endpoint_url( $endpoint );
 	if ( is_wp_error( $validated_endpoint ) ) {
 		return $validated_endpoint;
@@ -930,7 +968,7 @@ function eai_fetch_api_payload( $endpoint, $token = '', $bypass_cache = false ) 
 	if ( false === $cached_payload ) {
 		$response = wp_remote_get(
 			$endpoint,
-			eai_get_remote_request_args( $token, 30 )
+			eai_get_remote_request_args( $auth_method, $token, $auth_header_name, $auth_username, $auth_password )
 		);
 
 		if ( is_wp_error( $response ) ) {
@@ -1009,14 +1047,18 @@ function eai_extract_and_stage_data( $import_id ) {
 	}
 
 	$endpoint  = trim( (string) $import_job['endpoint_url'] );
-	$token     = trim( (string) $import_job['auth_token'] );
+	$auth_method      = trim( (string) ( $import_job['auth_method'] ?? 'none' ) );
+	$token             = trim( (string) $import_job['auth_token'] );
+	$auth_header_name  = trim( (string) ( $import_job['auth_header_name'] ?? '' ) );
+	$auth_username     = trim( (string) ( $import_job['auth_username'] ?? '' ) );
+	$auth_password     = (string) ( $import_job['auth_password'] ?? '' );
 	$json_path = trim( (string) $import_job['array_path'] );
 
 	if ( '' === $endpoint ) {
 		return new WP_Error( 'eai_missing_endpoint', __( 'API endpoint URL is not configured.', 'enterprise-api-importer' ) );
 	}
 
-	$fetched_payload = eai_fetch_api_payload( $endpoint, $token, false );
+	$fetched_payload = eai_fetch_api_payload( $endpoint, $auth_method, $token, $auth_header_name, $auth_username, $auth_password );
 
 	if ( is_wp_error( $fetched_payload ) ) {
 		return $fetched_payload;
