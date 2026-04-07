@@ -21,16 +21,19 @@ It gives you:
 ## Core Capabilities
 
 - Multi-import job manager in wp-admin.
-- External API extraction with optional Bearer token support.
+- External API extraction with flexible auth methods (`none`, `bearer`, `api_key_custom`, `basic_auth`).
 - JSON array path resolution for nested payloads.
 - Rule-based pre-stage filtering (AND logic).
 - Twig-based mapping templates for complex transformations.
 - Twig-based post title templates with safe sanitization.
+- Optional templates for new jobs (save connection first, map later).
 - Configurable target post type per import job.
+- React-powered tabbed Import Job Workspace for add/edit flows.
 - Queue-based batch processor to avoid timeout-heavy monolithic runs.
 - Per-import recurrence schedules (`off`, `hourly`, `twicedaily`, `daily`, custom N-minute intervals).
 - Health and schedule dashboard with run stats and trigger source visibility.
-- Endpoint test and preview tools before production execution.
+- Endpoint test, API data preview, and Twig dry-run tools before production execution.
+- Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
 
 ## What Was Recently Added
 
@@ -276,6 +279,30 @@ apply_filters( 'eai_allow_internal_endpoints', false ); // default: block RFC191
 add_filter( 'eai_twig_strict_variables', function() { return false; } ); // permissive mode
 ```
 
+### 6) React Import Job Workspace + REST CRUD
+
+The import add/edit screen has been rebuilt as a React tabbed workspace using `@wordpress/components`.
+
+- Tabs: Source & Auth, Data Rules, Mapping & Templating, Automation.
+- Sticky action footer with Save, Run Import Now, and Update Existing Items.
+- REST-backed job management for modern UI workflows:
+  - `GET /wp-json/eapi/v1/import-jobs/{id}`
+  - `POST /wp-json/eapi/v1/import-jobs`
+  - `PUT /wp-json/eapi/v1/import-jobs/{id}`
+  - `POST /wp-json/eapi/v1/import-jobs/{id}/run`
+  - `POST /wp-json/eapi/v1/import-jobs/{id}/template-sync`
+- API test endpoint (`/wp-json/eapi/v1/test-api-connection`) now powers in-UI sample preview for mapping.
+- Dry-run endpoint (`/wp-json/eapi/v1/dry-run`) supports template verification before import runs.
+
+### 7) Per-Import Edit-Lock Toggle
+
+You can now control edit behavior per import job from Mapping & Templating.
+
+- New setting: `lock_editing` (stored on the import config).
+- When enabled, imported posts from that job are read-only in wp-admin (edit/delete/quick-edit restricted).
+- When disabled, imported posts remain fully editable by normal WordPress permissions.
+- Applies to all imported post types (not only the `imported_item` CPT).
+
 ## Data Flow (ETL)
 
 1. Extract
@@ -312,18 +339,21 @@ add_filter( 'eai_twig_strict_variables', function() { return false; } ); // perm
 
 Go to `EAPI -> Manage Imports` and click `Add New`.
 
+Use the tabbed workspace to configure the job in phases.
+
 Configure:
 
 - Name
 - Endpoint URL
-- Bearer Token (optional)
+- Auth Method (`none`, `bearer`, `api_key_custom`, `basic_auth`)
 - JSON Array Path (optional)
 - Unique ID Path (optional, defaults to `id`)
 - Recurrence and custom interval (if needed)
 - Target Post Type
+- Lock editing of imported posts (optional)
 - Data Filters
 - Post Title Template (optional Twig)
-- Mapping Template (Twig)
+- Mapping Template (optional Twig for initial creation)
 
 ### 2. Test Before Running
 
@@ -362,7 +392,7 @@ Recommended baseline:
 ### Capability-Based Access Control
 - **Template management**: Restricted to `eai_manage_templates` capability (or `manage_options` / multisite super-admin).
 - **Import operations**: Guarded by permission checks on admin pages and REST endpoints.
-- **Imported content**: Read-only (no editing, deletion, or quick-edit) via `map_meta_cap` filter.
+- **Imported content**: Read-only behavior is configurable per import job (`lock_editing`) via `map_meta_cap` filter.
 
 ### Template & Twig Security
 - **Validation layers**: Pre-save, pre-render, and REST dry-run all validate template safety.
@@ -392,6 +422,7 @@ Recommended baseline:
     - endpoint/auth/paths
     - recurrence settings
     - `target_post_type`
+    - `lock_editing`
     - `title_template`
     - `mapping_template`
 

@@ -112,6 +112,76 @@ function eai_register_rest_routes() {
 			},
 		)
 	);
+
+	register_rest_route(
+		'eapi/v1',
+		'/test-api-connection',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'eai_rest_test_api_connection',
+			'permission_callback' => static function () {
+				return eai_current_user_can_manage_imports();
+			},
+		)
+	);
+
+	// CRUD endpoints for Import Job Workspace (React).
+	register_rest_route(
+		'eapi/v1',
+		'/import-jobs/(?P<id>[\d]+)',
+		array(
+			array(
+				'methods'             => 'GET',
+				'callback'            => 'eai_rest_get_import_job',
+				'permission_callback' => static function () {
+					return eai_current_user_can_manage_imports();
+				},
+			),
+			array(
+				'methods'             => 'PUT',
+				'callback'            => 'eai_rest_update_import_job',
+				'permission_callback' => static function () {
+					return eai_current_user_can_manage_imports();
+				},
+			),
+		)
+	);
+
+	register_rest_route(
+		'eapi/v1',
+		'/import-jobs',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'eai_rest_create_import_job',
+			'permission_callback' => static function () {
+				return eai_current_user_can_manage_imports();
+			},
+		)
+	);
+
+	register_rest_route(
+		'eapi/v1',
+		'/import-jobs/(?P<id>[\d]+)/run',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'eai_rest_run_import_job',
+			'permission_callback' => static function () {
+				return eai_current_user_can_manage_imports();
+			},
+		)
+	);
+
+	register_rest_route(
+		'eapi/v1',
+		'/import-jobs/(?P<id>[\d]+)/template-sync',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'eai_rest_template_sync_import_job',
+			'permission_callback' => static function () {
+				return eai_current_user_can_manage_imports();
+			},
+		)
+	);
 }
 add_action( 'rest_api_init', 'eai_register_rest_routes' );
 
@@ -437,6 +507,507 @@ function eai_rest_dry_run_template_preview( WP_REST_Request $request ) {
 			'raw_data'       => $record,
 			'rendered_title' => sanitize_text_field( $rendered_title ),
 			'rendered_body'  => wp_kses_post( $rendered_body ),
+		),
+		200
+	);
+}
+
+/**
+ * Tests API connection and returns sample data structure (for new import setup).
+ *
+ * @param WP_REST_Request $request REST request object.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_test_api_connection( WP_REST_Request $request ) {
+	$params         = $request->get_json_params();
+	$params         = is_array( $params ) ? $params : array();
+	$api_url        = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
+	$array_path     = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
+	$auth_method    = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
+	$auth_token     = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
+	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
+	$auth_username  = isset( $params['auth_username'] ) ? sanitize_text_field( (string) $params['auth_username'] ) : '';
+	$auth_password  = isset( $params['auth_password'] ) ? (string) $params['auth_password'] : '';
+
+	$validated_endpoint = eai_validate_remote_endpoint_url( $api_url );
+	if ( is_wp_error( $validated_endpoint ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => $validated_endpoint->get_error_code(),
+				'message' => $validated_endpoint->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$response = wp_remote_get(
+		$api_url,
+		eai_get_remote_request_args( $auth_method, $auth_token, $auth_header_name, $auth_username, $auth_password )
+	);
+
+	if ( is_wp_error( $response ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_remote_request_failed',
+				'message' => $response->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$status_code = (int) wp_remote_retrieve_response_code( $response );
+	if ( $status_code < 200 || $status_code >= 300 ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_remote_http_error',
+				'message' => sprintf(
+					/* translators: %d is HTTP status code. */
+					__( 'API connection failed with HTTP status %d.', 'enterprise-api-importer' ),
+					$status_code
+				),
+			),
+			400
+		);
+	}
+
+	$body = wp_remote_retrieve_body( $response );
+	$decoded_json = json_decode( (string) $body, true );
+
+	if ( JSON_ERROR_NONE !== json_last_error() ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'eai_invalid_json',
+				'message' => sprintf(
+					/* translators: %s is the JSON parser error message. */
+					__( 'API returned invalid JSON: %s', 'enterprise-api-importer' ),
+					json_last_error_msg()
+				),
+			),
+			400
+		);
+	}
+
+	$selected_array = eai_resolve_json_array_path( $decoded_json, $array_path );
+	if ( is_wp_error( $selected_array ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => $selected_array->get_error_code(),
+				'message' => $selected_array->get_error_message(),
+			),
+			400
+		);
+	}
+
+	$sample_item = null;
+	$available_keys = array();
+
+	if ( is_array( $selected_array ) ) {
+		$sample_item = eai_array_is_list( $selected_array ) && ! empty( $selected_array ) ? $selected_array[0] : $selected_array;
+	}
+
+	if ( is_array( $sample_item ) ) {
+		$available_keys = array_keys( $sample_item );
+	}
+
+	$sample_json = wp_json_encode( $sample_item, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+	if ( false === $sample_json ) {
+		$sample_json = '';
+	}
+
+	$item_count = 0;
+	if ( is_array( $selected_array ) ) {
+		$item_count = eai_array_is_list( $selected_array ) ? count( $selected_array ) : 1;
+	}
+
+	return new WP_REST_Response(
+		array(
+			'success'          => true,
+			'message'          => __( 'API connection successful.', 'enterprise-api-importer' ),
+			'status_code'      => $status_code,
+			'item_count'       => $item_count,
+			'available_keys'   => $available_keys,
+			'sample_data'      => $sample_item,
+			'sample_json'      => $sample_json,
+		),
+		200
+	);
+}
+
+/**
+ * REST: Returns a single import job for the React workspace.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_get_import_job( WP_REST_Request $request ) {
+	$id  = absint( $request->get_param( 'id' ) );
+	$row = eai_db_get_import_config( $id );
+
+	if ( ! is_array( $row ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'not_found', 'message' => __( 'Import job not found.', 'enterprise-api-importer' ) ),
+			404
+		);
+	}
+
+	// Mask sensitive fields: send boolean presence instead of raw values.
+	$row['id']                       = (int) $row['id'];
+	$row['custom_interval_minutes']  = absint( $row['custom_interval_minutes'] );
+	$row['lock_editing']             = (int) $row['lock_editing'];
+
+	return new WP_REST_Response( $row, 200 );
+}
+
+/**
+ * Shared import-job field sanitisation used by create and update REST handlers.
+ *
+ * @param array<string, mixed> $params Raw request params.
+ *
+ * @return array{data: array<string, mixed>, formats: array<int, string>}|WP_REST_Response
+ */
+function eai_rest_sanitize_import_job_fields( array $params ) {
+	$name             = isset( $params['name'] ) ? sanitize_text_field( (string) $params['name'] ) : '';
+	$endpoint_url     = isset( $params['endpoint_url'] ) ? esc_url_raw( trim( (string) $params['endpoint_url'] ) ) : '';
+	$auth_method      = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
+	$auth_token       = isset( $params['auth_token'] ) ? sanitize_text_field( trim( (string) $params['auth_token'] ) ) : '';
+	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
+	$auth_username    = isset( $params['auth_username'] ) ? sanitize_text_field( (string) $params['auth_username'] ) : '';
+	$auth_password    = isset( $params['auth_password'] ) ? (string) $params['auth_password'] : '';
+	$array_path       = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
+	$unique_id_path   = isset( $params['unique_id_path'] ) ? sanitize_text_field( (string) $params['unique_id_path'] ) : 'id';
+	$recurrence       = isset( $params['recurrence'] ) ? sanitize_key( (string) $params['recurrence'] ) : 'off';
+	$custom_interval_minutes = isset( $params['custom_interval_minutes'] ) ? absint( $params['custom_interval_minutes'] ) : 0;
+	$target_post_type = isset( $params['target_post_type'] ) ? sanitize_key( (string) $params['target_post_type'] ) : 'post';
+	$title_template   = isset( $params['title_template'] ) ? sanitize_text_field( (string) $params['title_template'] ) : '';
+	$template_raw     = isset( $params['mapping_template'] ) ? (string) $params['mapping_template'] : '';
+
+	if ( '' === $name || '' === $endpoint_url ) {
+		return new WP_REST_Response(
+			array( 'code' => 'missing_fields', 'message' => __( 'Name and Endpoint URL are required.', 'enterprise-api-importer' ) ),
+			400
+		);
+	}
+
+	$allowed_auth_methods = array( 'none', 'bearer', 'api_key_custom', 'basic_auth' );
+	if ( ! in_array( $auth_method, $allowed_auth_methods, true ) ) {
+		$auth_method = 'none';
+	}
+
+	if ( 'api_key_custom' !== $auth_method ) {
+		$auth_header_name = '';
+	}
+	if ( 'bearer' !== $auth_method && 'api_key_custom' !== $auth_method ) {
+		$auth_token = '';
+	}
+	if ( 'basic_auth' !== $auth_method ) {
+		$auth_username = '';
+		$auth_password = '';
+	}
+
+	$allowed_recurrence = array( 'off', 'hourly', 'twicedaily', 'daily', 'custom' );
+	if ( ! in_array( $recurrence, $allowed_recurrence, true ) ) {
+		$recurrence = 'off';
+	}
+	if ( 'custom' === $recurrence ) {
+		$custom_interval_minutes = $custom_interval_minutes > 0 ? $custom_interval_minutes : 30;
+	} else {
+		$custom_interval_minutes = 0;
+	}
+
+	if ( '' === trim( $unique_id_path ) ) {
+		$unique_id_path = 'id';
+	}
+	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
+		$target_post_type = 'post';
+	}
+
+	$title_template = mb_substr( trim( $title_template ), 0, 255 );
+
+	if ( '' !== $title_template ) {
+		$title_check = eai_validate_twig_template_security( $title_template, 'title' );
+		if ( is_wp_error( $title_check ) ) {
+			return new WP_REST_Response(
+				array( 'code' => $title_check->get_error_code(), 'message' => $title_check->get_error_message() ),
+				400
+			);
+		}
+	}
+
+	$allowed_mapping_html = array(
+		'h1' => array(), 'h2' => array(), 'h3' => array(), 'h4' => array(), 'h5' => array(), 'h6' => array(),
+		'p' => array(), 'br' => array(), 'strong' => array(), 'em' => array(),
+		'ul' => array(), 'ol' => array(), 'li' => array(),
+		'a' => array( 'href' => true, 'title' => true, 'target' => true, 'rel' => true ),
+	);
+	$mapping_template = wp_kses( $template_raw, $allowed_mapping_html );
+
+	if ( '' !== $mapping_template ) {
+		$mapping_check = eai_validate_twig_template_security( $mapping_template, 'mapping' );
+		if ( is_wp_error( $mapping_check ) ) {
+			return new WP_REST_Response(
+				array( 'code' => $mapping_check->get_error_code(), 'message' => $mapping_check->get_error_message() ),
+				400
+			);
+		}
+	}
+
+	// Process filter rules (already JSON-encoded from the React app).
+	$filter_rules_json = '[]';
+	if ( isset( $params['filter_rules'] ) ) {
+		$raw_rules = $params['filter_rules'];
+		if ( is_string( $raw_rules ) ) {
+			$decoded_rules = json_decode( $raw_rules, true );
+		} else {
+			$decoded_rules = $raw_rules;
+		}
+		if ( is_array( $decoded_rules ) ) {
+			$filter_operator_options = eai_get_filter_operator_options();
+			$allowed_operators       = array_keys( $filter_operator_options );
+			$sanitized_rules         = array();
+			foreach ( $decoded_rules as $rule ) {
+				if ( ! is_array( $rule ) ) {
+					continue;
+				}
+				$rk = isset( $rule['key'] ) ? sanitize_text_field( trim( (string) $rule['key'] ) ) : '';
+				$ro = isset( $rule['operator'] ) ? sanitize_key( (string) $rule['operator'] ) : '';
+				$rv = isset( $rule['value'] ) ? sanitize_text_field( (string) $rule['value'] ) : '';
+				if ( '' === $rk || ! in_array( $ro, $allowed_operators, true ) ) {
+					continue;
+				}
+				$sanitized_rules[] = array( 'key' => $rk, 'operator' => $ro, 'value' => $rv );
+			}
+			$encoded = wp_json_encode( $sanitized_rules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+			if ( false !== $encoded ) {
+				$filter_rules_json = $encoded;
+			}
+		}
+	}
+
+	$data = array(
+		'name'                    => $name,
+		'endpoint_url'            => $endpoint_url,
+		'auth_method'             => $auth_method,
+		'auth_token'              => $auth_token,
+		'auth_header_name'        => $auth_header_name,
+		'auth_username'           => $auth_username,
+		'auth_password'           => $auth_password,
+		'array_path'              => $array_path,
+		'unique_id_path'          => $unique_id_path,
+		'recurrence'              => $recurrence,
+		'custom_interval_minutes' => $custom_interval_minutes,
+		'filter_rules'            => $filter_rules_json,
+		'target_post_type'        => $target_post_type,
+		'title_template'          => $title_template,
+		'mapping_template'        => $mapping_template,
+		'lock_editing'            => isset( $params['lock_editing'] ) ? absint( (bool) $params['lock_editing'] ) : 1,
+	);
+	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d' );
+
+	return array( 'data' => $data, 'formats' => $formats );
+}
+
+/**
+ * REST: Creates a new import job.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_create_import_job( WP_REST_Request $request ) {
+	$params   = $request->get_json_params();
+	$params   = is_array( $params ) ? $params : array();
+	$sanitized = eai_rest_sanitize_import_job_fields( $params );
+
+	if ( $sanitized instanceof WP_REST_Response ) {
+		return $sanitized;
+	}
+
+	$result = eai_db_save_import_config( 0, $sanitized['data'], $sanitized['formats'] );
+	if ( is_wp_error( $result ) ) {
+		return new WP_REST_Response(
+			array( 'code' => $result->get_error_code(), 'message' => $result->get_error_message() ),
+			500
+		);
+	}
+
+	$import_id = (int) $result;
+
+	eai_audit_template_configuration_change( $import_id, null, $sanitized['data'] );
+	eai_sync_import_recurrence_schedule( $import_id, $sanitized['data']['recurrence'], $sanitized['data']['custom_interval_minutes'] );
+
+	$saved = eai_db_get_import_config( $import_id );
+
+	return new WP_REST_Response(
+		is_array( $saved ) ? array_merge( $saved, array( 'id' => $import_id ) ) : array( 'id' => $import_id ),
+		201
+	);
+}
+
+/**
+ * REST: Updates an existing import job.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_update_import_job( WP_REST_Request $request ) {
+	$id     = absint( $request->get_param( 'id' ) );
+	$params = $request->get_json_params();
+	$params = is_array( $params ) ? $params : array();
+
+	$previous = eai_db_get_import_config( $id );
+	if ( ! is_array( $previous ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'not_found', 'message' => __( 'Import job not found.', 'enterprise-api-importer' ) ),
+			404
+		);
+	}
+
+	$sanitized = eai_rest_sanitize_import_job_fields( $params );
+	if ( $sanitized instanceof WP_REST_Response ) {
+		return $sanitized;
+	}
+
+	$result = eai_db_save_import_config( $id, $sanitized['data'], $sanitized['formats'] );
+	if ( is_wp_error( $result ) ) {
+		return new WP_REST_Response(
+			array( 'code' => $result->get_error_code(), 'message' => $result->get_error_message() ),
+			500
+		);
+	}
+
+	eai_audit_template_configuration_change( $id, $previous, $sanitized['data'] );
+	eai_sync_import_recurrence_schedule( $id, $sanitized['data']['recurrence'], $sanitized['data']['custom_interval_minutes'] );
+
+	$saved = eai_db_get_import_config( $id );
+
+	return new WP_REST_Response(
+		is_array( $saved ) ? array_merge( $saved, array( 'id' => $id ) ) : array( 'id' => $id ),
+		200
+	);
+}
+
+/**
+ * REST: Triggers a manual import run.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_run_import_job( WP_REST_Request $request ) {
+	$id  = absint( $request->get_param( 'id' ) );
+	$row = eai_db_get_import_config( $id );
+
+	if ( ! is_array( $row ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'not_found', 'message' => __( 'Import job not found.', 'enterprise-api-importer' ) ),
+			404
+		);
+	}
+
+	$active_state = eai_get_active_run_state();
+	if ( ! empty( $active_state['run_id'] ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'import_running', 'message' => __( 'An import is already running.', 'enterprise-api-importer' ) ),
+			409
+		);
+	}
+
+	$extract_result = eai_extract_and_stage_data( $id );
+	if ( is_wp_error( $extract_result ) ) {
+		return new WP_REST_Response(
+			array( 'code' => $extract_result->get_error_code(), 'message' => $extract_result->get_error_message() ),
+			400
+		);
+	}
+
+	eai_set_active_run_state(
+		array(
+			'run_id'              => wp_generate_uuid4(),
+			'import_id'           => $id,
+			'trigger_source'      => 'manual',
+			'start_timestamp'     => time(),
+			'start_time'          => gmdate( 'Y-m-d H:i:s', time() ),
+			'rows_processed'      => 0,
+			'rows_created'        => 0,
+			'rows_updated'        => 0,
+			'temp_rows_found'     => 0,
+			'temp_rows_processed' => 0,
+			'errors'              => array(),
+			'slices'              => 0,
+		)
+	);
+
+	eai_handle_scheduled_import_batch();
+
+	return new WP_REST_Response(
+		array(
+			'success' => true,
+			'message' => __( 'Import run started.', 'enterprise-api-importer' ),
+		),
+		200
+	);
+}
+
+/**
+ * REST: Re-renders existing imported items using updated templates.
+ *
+ * @param WP_REST_Request $request REST request.
+ *
+ * @return WP_REST_Response
+ */
+function eai_rest_template_sync_import_job( WP_REST_Request $request ) {
+	$id  = absint( $request->get_param( 'id' ) );
+	$row = eai_db_get_import_config( $id );
+
+	if ( ! is_array( $row ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'not_found', 'message' => __( 'Import job not found.', 'enterprise-api-importer' ) ),
+			404
+		);
+	}
+
+	$active_state = eai_get_active_run_state();
+	if ( ! empty( $active_state['run_id'] ) ) {
+		return new WP_REST_Response(
+			array( 'code' => 'import_running', 'message' => __( 'An import is already running.', 'enterprise-api-importer' ) ),
+			409
+		);
+	}
+
+	$extract_result = eai_extract_and_stage_data( $id );
+	if ( is_wp_error( $extract_result ) ) {
+		return new WP_REST_Response(
+			array( 'code' => $extract_result->get_error_code(), 'message' => $extract_result->get_error_message() ),
+			400
+		);
+	}
+
+	eai_set_active_run_state(
+		array(
+			'run_id'              => wp_generate_uuid4(),
+			'import_id'           => $id,
+			'trigger_source'      => 'manual',
+			'start_timestamp'     => time(),
+			'start_time'          => gmdate( 'Y-m-d H:i:s', time() ),
+			'rows_processed'      => 0,
+			'rows_created'        => 0,
+			'rows_updated'        => 0,
+			'temp_rows_found'     => 0,
+			'temp_rows_processed' => 0,
+			'errors'              => array(),
+			'slices'              => 0,
+		)
+	);
+
+	eai_handle_scheduled_import_batch();
+
+	return new WP_REST_Response(
+		array(
+			'success' => true,
+			'message' => __( 'Template sync started.', 'enterprise-api-importer' ),
 		),
 		200
 	);
@@ -934,9 +1505,18 @@ function eai_get_filter_operator_options() {
 }
 
 /**
- * Renders create/edit import page.
+ * Renders create/edit import page (React-powered workspace).
  */
 function eai_render_import_edit_page() {
+	echo '<div class="wrap"><div id="eapi-import-job-root"></div></div>';
+}
+
+/**
+ * Legacy create/edit import page renderer (replaced by React workspace).
+ *
+ * @deprecated Use eai_render_import_edit_page() which mounts the React workspace.
+ */
+function eai_render_import_edit_page_legacy() {
 // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only import ID for loading edit form data.
 $import_id     = isset( $_GET['id'] ) ? absint( wp_unslash( $_GET['id'] ) ) : 0;
 $import_row    = null;
@@ -1037,13 +1617,66 @@ $is_edit = (int) $import['id'] > 0;
 <h1><?php echo esc_html( $is_edit ? __( 'Edit Import Job', 'enterprise-api-importer' ) : __( 'Create Import Job', 'enterprise-api-importer' ) ); ?></h1>
 <?php eai_render_admin_notices(); ?>
 
+<style>
+.eai-import-form-table {
+	max-width: 1100px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 10px;
+	overflow: hidden;
+}
+
+.eai-import-form-table th,
+.eai-import-form-table td {
+	padding-top: 14px;
+	padding-bottom: 14px;
+	border-top: 1px solid #f0f0f1;
+}
+
+.eai-import-form-table tbody tr:first-child th,
+.eai-import-form-table tbody tr:first-child td,
+.eai-import-form-table .eai-form-section + tr th,
+.eai-import-form-table .eai-form-section + tr td {
+	border-top: 0;
+}
+
+.eai-import-form-table .eai-form-section th {
+	padding: 18px 20px 12px;
+	background: linear-gradient(180deg, #f8fafc 0%, #f3f4f6 100%);
+	border-top: 1px solid #dcdcde;
+}
+
+.eai-import-form-table .eai-form-section:first-child th {
+	border-top: 0;
+}
+
+.eai-form-section-title {
+	margin: 0 0 4px;
+	font-size: 14px;
+	font-weight: 600;
+	color: #0f172a;
+}
+
+.eai-form-section-description {
+	margin: 0;
+	font-weight: 400;
+	color: #475569;
+}
+</style>
+
 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 <input type="hidden" name="action" value="eai_save_import" />
 <input type="hidden" name="import_id" value="<?php echo esc_attr( (string) $import['id'] ); ?>" />
 <?php wp_nonce_field( 'eai_save_import', 'eai_save_import_nonce' ); ?>
 
-<table class="form-table" role="presentation">
+<table class="form-table eai-import-form-table" role="presentation">
 <tbody>
+<tr class="eai-form-section">
+<th colspan="2" scope="colgroup">
+<h2 class="eai-form-section-title"><?php esc_html_e( 'Connection Setup', 'enterprise-api-importer' ); ?></h2>
+<p class="eai-form-section-description"><?php esc_html_e( 'Define the endpoint, choose authentication, and confirm the API is returning the data you expect.', 'enterprise-api-importer' ); ?></p>
+</th>
+</tr>
 <tr>
 <th scope="row"><label for="eai_import_name"><?php esc_html_e( 'Name', 'enterprise-api-importer' ); ?></label></th>
 <td><input name="name" type="text" id="eai_import_name" class="regular-text" value="<?php echo esc_attr( (string) $import['name'] ); ?>" required /></td>
@@ -1096,6 +1729,12 @@ $is_edit = (int) $import['id'] > 0;
 <td>
 <input name="auth_password" type="password" id="eai_import_auth_password" class="regular-text" value="<?php echo esc_attr( (string) $import['auth_password'] ); ?>" autocomplete="new-password" />
 </td>
+</tr>
+<tr class="eai-form-section">
+<th colspan="2" scope="colgroup">
+<h2 class="eai-form-section-title"><?php esc_html_e( 'Import Rules', 'enterprise-api-importer' ); ?></h2>
+<p class="eai-form-section-description"><?php esc_html_e( 'Tell the importer where the records live, how to identify them, when to run, and which items to include.', 'enterprise-api-importer' ); ?></p>
+</th>
 </tr>
 <tr>
 <th scope="row"><label for="eai_import_array_path"><?php esc_html_e( 'JSON Array Path', 'enterprise-api-importer' ); ?></label></th>
@@ -1286,6 +1925,21 @@ $is_edit = (int) $import['id'] > 0;
 </td>
 </tr>
 <tr>
+<th scope="row"><?php esc_html_e( 'API Preview', 'enterprise-api-importer' ); ?></th>
+<td>
+<p class="description"><?php esc_html_e( 'Test your API connection and see available data fields before creating templates.', 'enterprise-api-importer' ); ?></p>
+<p><button type="button" class="button button-secondary" id="eai-preview-api-trigger"><?php esc_html_e( 'Preview API Data', 'enterprise-api-importer' ); ?></button></p>
+<div id="eai-preview-success" class="notice notice-success" style="display:none; margin:0 0 12px; padding:12px; position:relative;"></div>
+<div id="eai-preview-error" class="notice notice-error" style="display:none; margin:0 0 12px; padding:8px 12px;"></div>
+</td>
+</tr>
+<tr class="eai-form-section">
+<th colspan="2" scope="colgroup">
+<h2 class="eai-form-section-title"><?php esc_html_e( 'Templates & Testing', 'enterprise-api-importer' ); ?></h2>
+<p class="eai-form-section-description"><?php esc_html_e( 'Preview the API response, then build and dry-run the Twig templates that turn records into WordPress content.', 'enterprise-api-importer' ); ?></p>
+</th>
+</tr>
+<tr>
 <th scope="row"><label for="eai_import_title_template"><?php esc_html_e( 'Post Title Template', 'enterprise-api-importer' ); ?></label></th>
 <td>
 <input name="title_template" type="text" id="eai_import_title_template" class="large-text" maxlength="255" value="<?php echo esc_attr( (string) $import['title_template'] ); ?>" />
@@ -1431,7 +2085,7 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 </div>
 <?php endif; ?>
 
-<div id="eai-dry-run-modal" class="eai-dry-run-modal" aria-hidden="true" style="display:none;">
+<div id="eai-dry-run-modal" class="eai-dry-run-modal" aria-hidden="true" inert style="display:none;">
 <div class="eai-dry-run-modal__backdrop" data-close="1"></div>
 <div class="eai-dry-run-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="eai-dry-run-modal-title">
 <div class="eai-dry-run-modal__header">
@@ -1534,30 +2188,39 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 </style>
 
 <script>
+var config = <?php echo wp_json_encode(
+	array(
+		'restUrl' => esc_url_raw( rest_url( 'eapi/v1/dry-run' ) ),
+		'nonce'   => wp_create_nonce( 'wp_rest' ),
+		'i18n'    => array(
+			'buttonIdle'       => __( 'Test Template (Dry Run)', 'enterprise-api-importer' ),
+			'buttonLoading'    => __( 'Fetching...', 'enterprise-api-importer' ),
+			'requestFailed'    => __( 'Dry run request failed.', 'enterprise-api-importer' ),
+			'retryMessage'     => __( 'Dry run request failed. Please try again.', 'enterprise-api-importer' ),
+			/* translators: %d is the Twig template line number where the syntax error occurred. */
+			'twigErrorPrefix'  => __( 'Twig syntax error on line %d: ', 'enterprise-api-importer' ),
+		),
+	)
+); ?>;
+
+// Dry-run modal elements
+var trigger = document.getElementById( 'eai-dry-run-trigger' );
+var errorNotice = document.getElementById( 'eai-dry-run-error' );
+var modal = document.getElementById( 'eai-dry-run-modal' );
+var closeButton = document.getElementById( 'eai-dry-run-close' );
+var rawDataElement = document.getElementById( 'eai-dry-run-raw-data' );
+var titleElement = document.getElementById( 'eai-dry-run-rendered-title' );
+var bodyElement = document.getElementById( 'eai-dry-run-rendered-body' );
+
+// Preview API elements
+var previewTrigger = document.getElementById( 'eai-preview-api-trigger' );
+var previewSuccess = document.getElementById( 'eai-preview-success' );
+var previewError = document.getElementById( 'eai-preview-error' );
+
 ( function() {
-	var config = <?php echo wp_json_encode(
-		array(
-			'restUrl' => esc_url_raw( rest_url( 'eapi/v1/dry-run' ) ),
-			'nonce'   => wp_create_nonce( 'wp_rest' ),
-			'i18n'    => array(
-				'buttonIdle'       => __( 'Test Template (Dry Run)', 'enterprise-api-importer' ),
-				'buttonLoading'    => __( 'Fetching...', 'enterprise-api-importer' ),
-				'requestFailed'    => __( 'Dry run request failed.', 'enterprise-api-importer' ),
-				'retryMessage'     => __( 'Dry run request failed. Please try again.', 'enterprise-api-importer' ),
-				/* translators: %d is the Twig template line number where the syntax error occurred. */
-				'twigErrorPrefix'  => __( 'Twig syntax error on line %d: ', 'enterprise-api-importer' ),
-			),
-		)
-	); ?>;
-	var trigger = document.getElementById( 'eai-dry-run-trigger' );
-	var errorNotice = document.getElementById( 'eai-dry-run-error' );
-	var modal = document.getElementById( 'eai-dry-run-modal' );
-	var closeButton = document.getElementById( 'eai-dry-run-close' );
-	var rawDataElement = document.getElementById( 'eai-dry-run-raw-data' );
-	var titleElement = document.getElementById( 'eai-dry-run-rendered-title' );
-	var bodyElement = document.getElementById( 'eai-dry-run-rendered-body' );
 	var tabButtons = modal ? modal.querySelectorAll( '[data-tab]' ) : [];
 	var tabPanes = modal ? modal.querySelectorAll( '[data-pane]' ) : [];
+	var previouslyFocusedElement = null;
 
 	if ( ! trigger || ! errorNotice || ! modal || !closeButton || ! rawDataElement || ! titleElement || ! bodyElement ) {
 		return;
@@ -1579,13 +2242,25 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 	};
 
 	var openModal = function() {
+		previouslyFocusedElement = document.activeElement;
+		modal.removeAttribute( 'inert' );
 		modal.style.display = 'flex';
 		modal.setAttribute( 'aria-hidden', 'false' );
+		if ( closeButton && typeof closeButton.focus === 'function' ) {
+			closeButton.focus();
+		}
 	};
 
 	var closeModal = function() {
-		modal.style.display = 'none';
+		if ( document.activeElement && modal.contains( document.activeElement ) && trigger && typeof trigger.focus === 'function' ) {
+			trigger.focus();
+		} else if ( previouslyFocusedElement && typeof previouslyFocusedElement.focus === 'function' ) {
+			previouslyFocusedElement.focus();
+		}
+
 		modal.setAttribute( 'aria-hidden', 'true' );
+		modal.style.display = 'none';
+		modal.setAttribute( 'inert', '' );
 	};
 
 	var activateTab = function( tabName ) {
@@ -1719,6 +2394,139 @@ echo esc_html( sprintf( __( 'Record %d', 'enterprise-api-importer' ), isset( $pr
 			} );
 	} );
 } )();
+
+( function() {
+	if ( ! previewTrigger || ! previewSuccess || ! previewError || ! config ) {
+		return;
+	}
+
+	var showPreviewSuccess = function( message ) {
+		previewSuccess.innerHTML = message;
+		previewSuccess.style.display = 'block';
+	};
+
+	var clearPreviewSuccess = function() {
+		previewSuccess.innerHTML = '';
+		previewSuccess.style.display = 'none';
+	};
+
+	var showPreviewError = function( message ) {
+		clearPreviewSuccess();
+		previewError.textContent = message;
+		previewError.style.display = 'block';
+	};
+
+	var clearPreviewError = function() {
+		previewError.textContent = '';
+		previewError.style.display = 'none';
+	};
+
+	previewTrigger.addEventListener( 'click', function() {
+		clearPreviewError();
+		clearPreviewSuccess();
+		previewTrigger.disabled = true;
+		var originalText = previewTrigger.textContent;
+		previewTrigger.textContent = '<?php echo esc_js( __( 'Testing...', 'enterprise-api-importer' ) ); ?>';
+
+		var apiUrlInput = document.getElementById( 'eai_import_endpoint_url' );
+		var authMethodInput = document.getElementById( 'eai_import_auth_method' );
+		var authTokenBearerInput = document.getElementById( 'eai_import_auth_token_bearer' );
+		var authTokenApikeyInput = document.getElementById( 'eai_import_auth_token_apikey' );
+		var authHeaderNameInput = document.getElementById( 'eai_import_auth_header_name' );
+		var authUsernameInput = document.getElementById( 'eai_import_auth_username' );
+		var authPasswordInput = document.getElementById( 'eai_import_auth_password' );
+		var arrayPathInput = document.getElementById( 'eai_import_array_path' );
+
+		var currentMethod = authMethodInput ? authMethodInput.value : 'none';
+		var resolvedToken = '';
+		if ( currentMethod === 'bearer' ) {
+			resolvedToken = authTokenBearerInput ? authTokenBearerInput.value : '';
+		} else if ( currentMethod === 'api_key_custom' ) {
+			resolvedToken = authTokenApikeyInput ? authTokenApikeyInput.value : '';
+		}
+
+		var testPayload = {
+			api_url: apiUrlInput ? apiUrlInput.value.trim() : '',
+			array_path: arrayPathInput ? arrayPathInput.value.trim() : '',
+			auth_method: currentMethod,
+			auth_token: resolvedToken,
+			auth_header_name: authHeaderNameInput ? authHeaderNameInput.value : '',
+			auth_username: authUsernameInput ? authUsernameInput.value : '',
+			auth_password: authPasswordInput ? authPasswordInput.value : ''
+		};
+
+		fetch( config.restUrl.replace( '/dry-run', '/test-api-connection' ), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-WP-Nonce': config.nonce
+			},
+			body: JSON.stringify( testPayload )
+		} )
+			.then( function( response ) {
+				return response.json().then( function( data ) {
+					return {
+						ok: response.ok,
+						data: data
+					};
+				} );
+			} )
+			.then( function( result ) {
+				previewTrigger.disabled = false;
+				previewTrigger.textContent = originalText;
+
+				if ( ! result.ok ) {
+					var message = result.data && result.data.message ? result.data.message : '<?php echo esc_js( __( 'API test failed.', 'enterprise-api-importer' ) ); ?>';
+					showPreviewError( message );
+					return;
+				}
+
+				var keysHtml = '<strong><?php echo esc_js( __( 'Available Fields:', 'enterprise-api-importer' ) ); ?></strong> ';
+				if ( result.data.available_keys && result.data.available_keys.length > 0 ) {
+					keysHtml += '<?php echo esc_js( __( 'data.', 'enterprise-api-importer' ) ); ?>' + result.data.available_keys.join( ', data.' );
+				} else {
+					keysHtml += '<?php echo esc_js( __( 'No keys found', 'enterprise-api-importer' ) ); ?>';
+				}
+
+				var successMsg = '<div style="background: #f0f6fc; border: 1px solid #7293a1; padding: 10px; border-radius: 4px; margin-bottom: 10px;">' +
+					'<button type="button" class="button-link" id="eai-preview-success-dismiss" aria-label="<?php echo esc_js( __( 'Dismiss preview result', 'enterprise-api-importer' ) ); ?>" style="position: absolute; top: 8px; right: 10px; text-decoration: none; font-size: 16px; line-height: 1;">&times;</button>' +
+					'<p><strong><?php echo esc_js( __( 'Connection Successful!', 'enterprise-api-importer' ) ); ?></strong></p>' +
+					'<p><?php echo esc_js( __( 'Items Found:', 'enterprise-api-importer' ) ); ?> ' + result.data.item_count + '</p>' +
+					'<p>' + keysHtml + '</p>' +
+					'<p style="margin-top: 8px;"><strong><?php echo esc_js( __( 'Sample Data:', 'enterprise-api-importer' ) ); ?></strong></p>' +
+					'<pre style="background: #fff; border: 1px solid #ddd; padding: 8px; border-radius: 3px; max-height: 300px; overflow: auto; font-size: 12px;">' + window.escapeHtml( result.data.sample_json || '{}' ) + '</pre>' +
+					'</div>';
+
+				showPreviewSuccess( successMsg );
+
+				var dismissButton = document.getElementById( 'eai-preview-success-dismiss' );
+				if ( dismissButton ) {
+					dismissButton.addEventListener( 'click', function() {
+						clearPreviewSuccess();
+					} );
+				}
+			} )
+			.catch( function( error ) {
+				previewTrigger.disabled = false;
+				previewTrigger.textContent = originalText;
+				showPreviewError( '<?php echo esc_js( __( 'API test request failed. See browser console for details.', 'enterprise-api-importer' ) ); ?>' );
+				console.error( 'API test error:', error );
+			} );
+	} );
+
+	if ( ! window.escapeHtml ) {
+		window.escapeHtml = function( text ) {
+			var map = {
+				'&': '&amp;',
+				'<': '&lt;',
+				'>': '&gt;',
+				'"': '&quot;',
+				"'": '&#039;'
+			};
+			return String( text ).replace( /[&<>"']/g, function( m ) { return map[ m ]; } );
+		};
+	}
+} )();
 </script>
 </div>
 <?php
@@ -1822,14 +2630,24 @@ $mapping_template = wp_kses( (string) $template_raw, $allowed_mapping_html );
 
 $title_template_validation = eai_validate_twig_template_security( $title_template, 'title' );
 if ( is_wp_error( $title_template_validation ) ) {
-wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
-exit;
+	wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+	exit;
 }
 
-$mapping_template_validation = eai_validate_twig_template_security( $mapping_template, 'mapping' );
-if ( is_wp_error( $mapping_template_validation ) ) {
-wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
-exit;
+// For new imports, templates are optional. For existing imports, require mapping template.
+$is_new_import = 0 === $import_id;
+$requires_templates = ! $is_new_import;
+$mapping_template_missing = '' === $mapping_template;
+
+if ( $requires_templates || ( $is_new_import && $mapping_template_missing && $title_template_missing ) ) {
+	// Only validate if template is provided.
+	if ( '' !== $mapping_template ) {
+		$mapping_template_validation = eai_validate_twig_template_security( $mapping_template, 'mapping' );
+		if ( is_wp_error( $mapping_template_validation ) ) {
+			wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
+			exit;
+		}
+	}
 }
 
 $filter_operator_options = eai_get_filter_operator_options();
@@ -1865,7 +2683,7 @@ if ( false === $filter_rules_json ) {
 	$filter_rules_json = '[]';
 }
 
-if ( '' === $name || '' === $endpoint_url || '' === $mapping_template ) {
+if ( '' === $name || '' === $endpoint_url || ( $import_id > 0 && '' === $mapping_template ) ) {
 wp_safe_redirect( add_query_arg( array( 'page' => 'eapi-manage', 'action' => 'edit', 'id' => $import_id, 'eai_notice' => 'import_error' ), admin_url( 'admin.php' ) ) );
 exit;
 }
@@ -2272,3 +3090,67 @@ function eai_enqueue_dashboard_assets( string $hook_suffix ): void {
 	);
 }
 add_action( 'admin_enqueue_scripts', 'eai_enqueue_dashboard_assets' );
+
+/**
+ * Enqueue import job workspace assets on the manage imports edit page only.
+ *
+ * @param string $hook_suffix Current admin page hook suffix.
+ */
+function eai_enqueue_import_job_assets( string $hook_suffix ): void {
+	if ( 'toplevel_page_eapi-manage' !== $hook_suffix ) {
+		return;
+	}
+
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only page routing check.
+	$action = isset( $_GET['action'] ) ? sanitize_key( (string) wp_unslash( $_GET['action'] ) ) : '';
+	if ( 'edit' !== $action ) {
+		return;
+	}
+
+	$asset_file = plugin_dir_path( __DIR__ ) . 'build/import-job.asset.php';
+	if ( ! file_exists( $asset_file ) ) {
+		return;
+	}
+
+	$asset = require $asset_file;
+
+	wp_enqueue_script(
+		'eapi-import-job',
+		plugins_url( 'build/import-job.js', __DIR__ ),
+		$asset['dependencies'],
+		$asset['version'],
+		true
+	);
+
+	wp_enqueue_style(
+		'eapi-import-job',
+		plugins_url( 'build/style-import-job.css', __DIR__ ),
+		array( 'wp-components' ),
+		$asset['version']
+	);
+
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only import ID for localized config.
+	$import_id = isset( $_GET['id'] ) ? absint( wp_unslash( $_GET['id'] ) ) : 0;
+
+	$post_types = array();
+	foreach ( get_post_types( array( 'public' => true ), 'objects' ) as $pt ) {
+		if ( 'attachment' === $pt->name ) {
+			continue;
+		}
+		$post_types[] = array(
+			'label' => $pt->labels->singular_name,
+			'value' => $pt->name,
+		);
+	}
+
+	wp_localize_script(
+		'eapi-import-job',
+		'eapiImportJob',
+		array(
+			'importId'  => $import_id,
+			'postTypes' => $post_types,
+			'nonce'     => wp_create_nonce( 'wp_rest' ),
+		)
+	);
+}
+add_action( 'admin_enqueue_scripts', 'eai_enqueue_import_job_assets' );

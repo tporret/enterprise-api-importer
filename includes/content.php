@@ -50,19 +50,33 @@ function eai_register_imported_item_cpt() {
 add_action( 'init', 'eai_register_imported_item_cpt' );
 
 /**
- * Determines whether a post is an imported item managed by this plugin.
+ * Determines whether a post is an imported item whose import job has editing locked.
+ *
+ * Checks any post type — returns true when the post carries an `_eai_import_id`
+ * meta value whose corresponding import configuration has `lock_editing` enabled.
  *
  * @param int $post_id Post ID.
  * @return bool
  */
 function eai_is_managed_imported_item( $post_id ) {
-	if ( 'imported_item' !== get_post_type( $post_id ) ) {
+	$import_id = get_post_meta( $post_id, '_eai_import_id', true );
+
+	if ( '' === (string) $import_id ) {
 		return false;
 	}
 
-	$import_id = get_post_meta( $post_id, '_eai_import_id', true );
+	$import_id = (int) $import_id;
+	if ( $import_id <= 0 ) {
+		return false;
+	}
 
-	return '' !== (string) $import_id;
+	$config = eai_db_get_import_config( $import_id );
+	if ( ! is_array( $config ) ) {
+		// Import configuration deleted — treat post as unlocked.
+		return false;
+	}
+
+	return ! empty( $config['lock_editing'] );
 }
 
 /**
@@ -131,17 +145,32 @@ function eai_filter_managed_imported_item_edit_link( $link, $post_id, $context )
 add_filter( 'get_edit_post_link', 'eai_filter_managed_imported_item_edit_link', 10, 3 );
 
 /**
- * Shows a read-only notice on Imported Items admin screens.
+ * Shows a read-only notice when viewing a list of import-locked posts.
  */
 function eai_render_imported_items_read_only_notice() {
 	$screen = get_current_screen();
 
-	if ( ! $screen || 'imported_item' !== $screen->post_type ) {
+	if ( ! $screen || 'edit' !== $screen->base ) {
 		return;
 	}
 
+	// Quick check: does this post type have any import-locked posts?
+	// The imported_item CPT is always relevant; for other types check meta existence.
+	if ( 'imported_item' !== $screen->post_type ) {
+		$has_locked = get_posts( array(
+			'post_type'      => $screen->post_type,
+			'meta_key'       => '_eai_import_id',
+			'meta_compare'   => 'EXISTS',
+			'posts_per_page' => 1,
+			'fields'         => 'ids',
+		) );
+		if ( empty( $has_locked ) ) {
+			return;
+		}
+	}
+
 	echo '<div class="notice notice-info"><p>';
-	echo esc_html__( 'Imported Items are managed by Enterprise API Importer and are read-only in wp-admin.', 'enterprise-api-importer' );
+	echo esc_html__( 'Some items on this screen are managed by Enterprise API Importer and may be read-only.', 'enterprise-api-importer' );
 	echo '</p></div>';
 }
 add_action( 'admin_notices', 'eai_render_imported_items_read_only_notice' );

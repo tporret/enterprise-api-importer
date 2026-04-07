@@ -17,10 +17,14 @@ Enterprise API Importer gives WordPress teams an enterprise-grade ETL pipeline f
 Use Enterprise API Importer to run clean, repeatable import workflows without sacrificing flexibility:
 
 - Multi-Connection Job Manager for organizing and scaling imports
+- React Tabbed Import Job Workspace (Source/Auth, Data Rules, Mapping/Templating, Automation)
 - Advanced JSON array traversal and pre-stage data filtering to remove noise before insertion
 - Twig Templating Engine for complex logic, loops, and nested object mapping without drag-and-drop limitations
 - Twig-powered Post Title Templates with safe sanitization and fallback handling
+- Optional templates for new jobs (start with connection setup, add templates later)
+- Multiple API auth modes: none, bearer token, custom API-key header, and basic auth
 - Per-import Target Post Type selection (posts, pages, and public custom post types)
+- Per-import editing lock toggle for imported posts (allow editing or enforce read-only)
 - Time-aware batch processing via WP-Cron to reduce timeout and memory-risk scenarios
 - **[New v1.1] Tableau-Style Reporting Dashboard:** Real-time metrics on environment health, security posture, and API performance with interactive charts, status indicators, and audit activity feed
 - **[New] Enterprise-Grade Security Hardening:**
@@ -42,6 +46,7 @@ Built for real-world production workflows:
 - Imported items are cryptographically linked to their origin import (read-only)
 - Template configuration changes are audit-logged with full actor context
 - Endpoints validated against configurable SSRF allowlists and HTTPS enforcement
+- Inline API connection testing, sample payload preview, and template dry-run rendering from the edit workspace
 
 == Installation ==
 1. Upload the plugin folder to the /wp-content/plugins/ directory, or install it through the WordPress Plugins screen.
@@ -56,7 +61,7 @@ No. It uses native WP-Cron scheduling, but supports CLI triggers.
 Yes. Nested objects and arrays can be parsed and transformed through Twig templating.
 
 = Does it handle API authentication? =
-Yes. It supports Bearer Tokens and custom headers.
+Yes. It supports four modes per import job: none, bearer token, custom API-key header, and basic auth.
 
 = Can I set dynamic titles for imported posts? =
 Yes. Use Post Title Template with Twig syntax. If left blank, the importer falls back to Imported Item {ID}.
@@ -68,7 +73,7 @@ Yes. Select any public post type from Target Post Type. If the selected post typ
 The plugin includes a secure media sideload helper foundation with source URL deduplication. Full field-level media mapping workflows can be added on top of this helper.
 
 = Who can edit imported items and templates? =
-Imported items are read-only (no editing, deletion allowed). Template configuration requires the `eai_manage_templates` capability or `manage_options` role. Multisite super admins always have access.
+Template configuration requires the `eai_manage_templates` capability or `manage_options` role. Multisite super admins always have access. Imported item editing can now be controlled per import job with the "Lock editing of imported posts" setting.
 
 = What Twig features are blocked for security? =
 The following Twig tags are disallowed to prevent file inclusion and code injection: `include`, `source`, `import`, `from`, `embed`, `extends`, `use`, `macro`.
@@ -109,6 +114,22 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 
 == Changelog ==
 = 1.1.0 =
+* **Updated: React Import Job Workspace**
+  - Replaced the legacy linear create/edit form with a tabbed workspace in wp-admin.
+  - Added sticky footer actions for save, run now, and update existing item content.
+* **Updated: REST Import Job CRUD + actions**
+  - Added REST routes for create/read/update import jobs and run/template sync actions.
+  - Added centralized sanitization for import job payloads used by create/update handlers.
+* **Updated: API validation and preview tooling**
+  - Added in-workspace API test button with sample record preview support.
+  - Added Twig dry-run test support from the Mapping & Templating tab.
+* **Updated: Authentication model**
+  - Added four auth methods per import job: none, bearer, custom API-key header, and basic auth.
+* **Updated: Optional templates for new imports**
+  - New imports can be created without title or mapping templates; templates can be added later.
+* **Updated: Per-import editing lock control**
+  - Added "Lock editing of imported posts" toggle in Mapping & Templating.
+  - Edit/delete restrictions now apply by import configuration and can be disabled per job.
 * **New: Enterprise Reporting Dashboard (Tableau-Style)**
   - Real-time operations command center with global health status badge and force-refresh controls.
   - Nine enterprise-grade metrics across three pillars:
@@ -152,6 +173,6 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 
 == Upgrade Notice ==
 = 1.1.0 =
-Security hardening release: New dedicated capability system, Twig template security validation, audit logging, SSRF allowlisting, and read-only enforcement for imported items. See Settings for new endpoint allowlist configuration.
+Security and UX release: Includes the new React import workspace, expanded auth methods, API preview/dry-run tools, optional templates on job creation, and per-import editing lock controls, plus enterprise hardening features (capabilities, Twig validation, audit logs, SSRF allowlisting).
 = 1.0.0 =
 Initial stable release with enterprise ETL controls, Twig templating, dynamic post titles, and target post type support.
