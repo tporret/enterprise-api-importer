@@ -1185,6 +1185,7 @@ function eai_render_imports_list_page() {
 				color: #334155;
 				letter-spacing: 0.03em;
 				text-transform: uppercase;
+				text-align: center;
 			}
 			.eapi-manage-card-body {
 				padding: 12px 16px 16px;
@@ -1214,19 +1215,39 @@ function eai_render_imports_list_page() {
 			.eapi-ownership-table td {
 				border-bottom: 1px solid #f1f5f9;
 			}
-			.eapi-manage-card .wp-list-table td.column-actions a {
+			.eapi-manage-card .wp-list-table th.column-actions,
+			.eapi-manage-card .wp-list-table td.column-actions {
+				text-align: center;
+			}
+			.eapi-manage-card .wp-list-table td.column-actions a.eapi-action-btn {
 				display: inline-block;
-				padding: 3px 8px;
+				padding: 2px 7px;
 				border-radius: 999px;
 				text-decoration: none;
-				border: 1px solid #dbe4ef;
-				background: #fff;
-				color: #1e40af;
-				font-size: 12px;
+				border: 1px solid transparent;
+				font-size: 11px;
 				font-weight: 600;
+				line-height: 1.2;
+				margin: 0 2px;
 			}
-			.eapi-manage-card .wp-list-table td.column-actions a:hover {
-				background: #eff6ff;
+			.eapi-manage-card .wp-list-table td.column-actions a.eapi-action-btn.is-edit {
+				background: #16a34a;
+				border-color: #15803d;
+				color: #ffffff;
+				padding: 4px 10px;
+				font-size: 12px;
+				font-weight: 700;
+			}
+			.eapi-manage-card .wp-list-table td.column-actions a.eapi-action-btn.is-edit:hover {
+				background: #15803d;
+			}
+			.eapi-manage-card .wp-list-table td.column-actions a.eapi-action-btn.is-delete {
+				background: #dc2626;
+				border-color: #b91c1c;
+				color: #ffffff;
+			}
+			.eapi-manage-card .wp-list-table td.column-actions a.eapi-action-btn.is-delete:hover {
+				background: #b91c1c;
 			}
 			.eapi-manage-card .wp-list-table td.column-endpoint,
 			.eapi-manage-card .wp-list-table td.column-id {

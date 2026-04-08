@@ -309,18 +309,18 @@ class EAI_Imports_List_Table extends WP_List_Table {
 		);
 
 		$edit_link = sprintf(
-			'<a href="%s">%s</a>',
+			'<a class="eapi-action-btn is-edit" href="%s">%s</a>',
 			esc_url( $edit_url ),
 			esc_html__( 'Edit', 'enterprise-api-importer' )
 		);
 
 		$delete_link = sprintf(
-			'<a href="%s" onclick="return confirm(\'%s\');">%s</a>',
+			'<a class="eapi-action-btn is-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
 			esc_url( $delete_url ),
 			esc_js( __( 'Are you sure you want to delete this import job?', 'enterprise-api-importer' ) ),
 			esc_html__( 'Delete', 'enterprise-api-importer' )
 		);
 
-		return $edit_link . ' | ' . $delete_link;
+		return $edit_link . ' ' . $delete_link;
 	}
 }
