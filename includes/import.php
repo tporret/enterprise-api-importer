@@ -1343,13 +1343,14 @@ function eai_resolve_json_array_path( $decoded_json, $path ) {
  *
  * @param string $mapping_template Mapping template for this import job.
  * @param string $title_template   Optional title template for this import job.
- * @param string $target_post_type Target post type for this import job.
- * @param string $unique_id_path   Unique identifier path. Defaults to id.
- * @param int    $import_id        Import job ID.
+ * @param string $target_post_type          Target post type for this import job.
+ * @param string $unique_id_path            Unique identifier path. Defaults to id.
+ * @param int    $import_id                 Import job ID.
+ * @param string $featured_image_source_path Dot-notation item path for featured image URL.
  *
  * @return array<string, mixed>|WP_Error
  */
-function eai_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0 ) {
+function eai_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0, $featured_image_source_path = 'image.url' ) {
 	if ( ! is_array( $item ) ) {
 		return new WP_Error( 'eai_invalid_item', __( 'Transform input must be an array.', 'enterprise-api-importer' ) );
 	}
@@ -1359,6 +1360,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 	$target_post_type = sanitize_key( (string) $target_post_type );
 	$unique_id_path   = trim( (string) $unique_id_path );
 	$import_id        = absint( $import_id );
+	$featured_image_source_path = trim( (string) $featured_image_source_path );
 
 	if ( '' === $target_post_type || 'attachment' === $target_post_type || ! post_type_exists( $target_post_type ) ) {
 		$target_post_type = 'post';
@@ -1366,6 +1368,10 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 
 	if ( '' === $unique_id_path ) {
 		$unique_id_path = 'id';
+	}
+
+	if ( '' === $featured_image_source_path ) {
+		$featured_image_source_path = 'image.url';
 	}
 
 	$external_id_value = eai_get_item_value_by_path( $item, $unique_id_path );
@@ -1538,6 +1544,8 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 			}
 		}
 
+		eai_assign_featured_image_from_item( $item, $insert_post_id, $import_id, $featured_image_source_path );
+
 		update_post_meta( $insert_post_id, '_my_custom_api_id', $external_id );
 		update_post_meta( $insert_post_id, '_eai_import_id', $import_id );
 		update_post_meta( $insert_post_id, '_last_synced_timestamp', $timestamp );
@@ -1555,6 +1563,8 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 	if ( ! $existing_post instanceof WP_Post ) {
 		return new WP_Error( 'eai_existing_post_not_found', __( 'Existing imported item post could not be loaded.', 'enterprise-api-importer' ) );
 	}
+
+	$featured_image_updated = eai_assign_featured_image_from_item( $item, $existing_post_id, $import_id, $featured_image_source_path );
 
 	if ( (string) $existing_post->post_content !== (string) $post_content ) {
 		$updated_post_id = wp_update_post(
@@ -1606,7 +1616,7 @@ function eai_transform_and_load_item( $item, $mapping_template, $title_template 
 	eai_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 
 	return array(
-		'action'  => 'unchanged',
+		'action'  => $featured_image_updated ? 'updated' : 'unchanged',
 		'post_id' => $existing_post_id,
 	);
 }
@@ -1901,6 +1911,67 @@ function eai_get_item_value_by_path( $item, $path ) {
 	}
 
 	return $current;
+}
+
+/**
+ * Assigns a featured image from a configured item field path.
+ *
+ * Default path is image.url and can be overridden with
+ * the eai_featured_image_source_path filter.
+ *
+ * @param array<string, mixed> $item        Item payload.
+ * @param int                  $post_id     Target post ID.
+ * @param int                  $import_id   Import job ID.
+ * @param string               $source_path Dot-notation path for image URL.
+ *
+ * @return bool True when thumbnail changed, otherwise false.
+ */
+function eai_assign_featured_image_from_item( $item, $post_id, $import_id = 0, $source_path = '' ) {
+	if ( ! is_array( $item ) ) {
+		return false;
+	}
+
+	$post_id   = absint( $post_id );
+	$import_id = absint( $import_id );
+
+	if ( $post_id <= 0 ) {
+		return false;
+	}
+
+	$source_path = trim( (string) $source_path );
+	$source_path = (string) apply_filters(
+		'eai_featured_image_source_path',
+		'' !== $source_path ? $source_path : 'image.url',
+		$item,
+		$post_id,
+		$import_id
+	);
+	$source_path = trim( $source_path );
+
+	if ( '' === $source_path ) {
+		return false;
+	}
+
+	$featured_image_url = eai_get_item_value_by_path( $item, $source_path );
+
+	if ( ! is_scalar( $featured_image_url ) ) {
+		return false;
+	}
+
+	$featured_image_url = trim( (string) $featured_image_url );
+
+	if ( '' === $featured_image_url || ! wp_http_validate_url( $featured_image_url ) ) {
+		return false;
+	}
+
+	$current_thumbnail_id = (int) get_post_thumbnail_id( $post_id );
+	$attachment_id        = EAI_Import_Processor::sideload_image( $featured_image_url, $post_id, true );
+
+	if ( false === $attachment_id ) {
+		return false;
+	}
+
+	return $current_thumbnail_id !== (int) $attachment_id;
 }
 
 /**
@@ -2344,11 +2415,16 @@ function eai_process_unprocessed_staging_rows( $started_at_microtime, $import_id
 		$title_template   = isset( $import_job['title_template'] ) ? (string) $import_job['title_template'] : '';
 		$target_post_type = isset( $import_job['target_post_type'] ) ? (string) $import_job['target_post_type'] : 'post';
 		$unique_id_path   = isset( $import_job['unique_id_path'] ) ? trim( (string) $import_job['unique_id_path'] ) : 'id';
+		$featured_image_source_path = isset( $import_job['featured_image_source_path'] ) ? trim( (string) $import_job['featured_image_source_path'] ) : 'image.url';
 		$chunks           = array_chunk( $items, 50 );
 		$row_completed    = true;
 
 		if ( '' === $unique_id_path ) {
 			$unique_id_path = 'id';
+		}
+
+		if ( '' === $featured_image_source_path ) {
+			$featured_image_source_path = 'image.url';
 		}
 
 		foreach ( $chunks as $chunk_items ) {
@@ -2362,7 +2438,7 @@ function eai_process_unprocessed_staging_rows( $started_at_microtime, $import_id
 
 				++$result['rows_processed'];
 
-				$item_result = eai_transform_and_load_item( $item, $mapping_template, $title_template, $target_post_type, $unique_id_path, $row_import_id );
+				$item_result = eai_transform_and_load_item( $item, $mapping_template, $title_template, $target_post_type, $unique_id_path, $row_import_id, $featured_image_source_path );
 
 				if ( is_wp_error( $item_result ) ) {
 					$result['errors'][] = sprintf(

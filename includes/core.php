@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'EAI_DB_SCHEMA_VERSION' ) ) {
-	define( 'EAI_DB_SCHEMA_VERSION', '20260407-1' );
+	define( 'EAI_DB_SCHEMA_VERSION', '20260408-1' );
 }
 
 /**
@@ -57,6 +57,7 @@ function eai_activate_plugin() {
 		custom_interval_minutes int(10) unsigned NOT NULL DEFAULT 0,
 		filter_rules longtext NULL,
 		target_post_type varchar(100) NOT NULL DEFAULT 'post',
+		featured_image_source_path varchar(191) NOT NULL DEFAULT 'image.url',
 		title_template varchar(255) NOT NULL DEFAULT '',
 		mapping_template longtext NOT NULL,
 		lock_editing tinyint(1) unsigned NOT NULL DEFAULT 1,
@@ -98,6 +99,7 @@ function eai_activate_plugin() {
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
 	eai_ensure_imports_auth_columns();
+	eai_ensure_imports_featured_image_column();
 
 	eai_sync_template_management_capabilities();
 
@@ -176,6 +178,25 @@ function eai_ensure_imports_auth_columns() {
 }
 
 /**
+ * Ensures featured image source path column exists on imports table.
+ *
+ * @return void
+ */
+function eai_ensure_imports_featured_image_column() {
+	global $wpdb;
+
+	$table = $wpdb->prefix . 'eapi_imports';
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$featured_image_path_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'featured_image_source_path' ) );
+
+	if ( null === $featured_image_path_col ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN featured_image_source_path varchar(191) NOT NULL DEFAULT 'image.url' AFTER target_post_type", $table ) );
+	}
+}
+
+/**
  * Runs on plugin deactivation.
  *
  * Clears plugin-owned scheduled cron events.
@@ -194,6 +215,7 @@ function eai_deactivate_plugin() {
 function eai_maybe_upgrade_schema() {
 	eai_sync_template_management_capabilities();
 	eai_ensure_imports_auth_columns();
+	eai_ensure_imports_featured_image_column();
 
 	$installed_version = (string) get_option( 'eai_db_schema_version', '' );
 

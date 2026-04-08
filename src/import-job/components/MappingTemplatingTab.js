@@ -1,8 +1,8 @@
-import { useState, useCallback } from '@wordpress/element';
+import { useState, useCallback, useMemo, useRef } from '@wordpress/element';
 import {
 	SelectControl,
 	TextControl,
-	TextareaControl,
+	BaseControl,
 	Button,
 	Notice,
 	Flex,
@@ -24,6 +24,8 @@ export default function MappingTemplatingTab( {
 } ) {
 	const [ dryRunning, setDryRunning ] = useState( false );
 	const [ dryRunResult, setDryRunResult ] = useState( null );
+	const [ templateScrollTop, setTemplateScrollTop ] = useState( 0 );
+	const templateEditorRef = useRef( null );
 
 	const postTypeOptions = ( postTypes || [] ).map( ( pt ) => ( {
 		label: pt.label,
@@ -79,6 +81,17 @@ export default function MappingTemplatingTab( {
 		? JSON.stringify( previewData, null, 2 )
 		: null;
 
+	const mappingTemplateLineNumbers = useMemo( () => {
+		const templateValue = ( job.mapping_template || '' ).replace( /\r\n/g, '\n' );
+		const lineCount = Math.max( 1, templateValue.split( '\n' ).length );
+
+		return Array.from( { length: lineCount }, ( value, index ) => index + 1 );
+	}, [ job.mapping_template ] );
+
+	const handleTemplateScroll = useCallback( ( event ) => {
+		setTemplateScrollTop( event.target.scrollTop );
+	}, [] );
+
 	return (
 		<div className="eapi-ij-tab-content">
 			<SelectControl
@@ -105,14 +118,48 @@ export default function MappingTemplatingTab( {
 						help={ __( 'Supports Twig syntax (for example: {{ data.first_name }} {{ data.last_name }}). If left blank, defaults to Imported Item {ID}.', 'enterprise-api-importer' ) }
 					/>
 
-					<TextareaControl
-						label={ __( 'Mapping Template', 'enterprise-api-importer' ) }
-						value={ job.mapping_template }
-						onChange={ ( val ) => updateField( 'mapping_template', val ) }
-						rows={ 16 }
-						className="eapi-ij-template-editor"
-						help={ __( 'Twig template for the post body. Use data.field_name to reference API fields.', 'enterprise-api-importer' ) }
+					<TextControl
+						label={ __( 'Featured Image Source Path', 'enterprise-api-importer' ) }
+						value={ job.featured_image_source_path || '' }
+						onChange={ ( val ) => updateField( 'featured_image_source_path', val ) }
+						help={ __( 'Dot-notation path used to set post featured image (for example: image.url). Leave blank to use image.url.', 'enterprise-api-importer' ) }
 					/>
+
+					<BaseControl
+						label={ __( 'Mapping Template', 'enterprise-api-importer' ) }
+						help={ __( 'Twig template for the post body. Use data.field_name to reference API fields.', 'enterprise-api-importer' ) }
+					>
+						<div className="eapi-ij-template-editor">
+							<div
+								className="eapi-ij-template-editor__gutter"
+								aria-hidden="true"
+							>
+								<div
+									className="eapi-ij-template-editor__gutter-inner"
+									style={ { transform: `translateY(-${ templateScrollTop }px)` } }
+								>
+									{ mappingTemplateLineNumbers.map( ( lineNumber ) => (
+										<div
+											key={ lineNumber }
+											className="eapi-ij-template-editor__gutter-line"
+										>
+											{ lineNumber }
+										</div>
+									) ) }
+								</div>
+							</div>
+
+							<textarea
+								ref={ templateEditorRef }
+								rows={ 16 }
+								className="eapi-ij-template-editor__textarea"
+								value={ job.mapping_template }
+								onChange={ ( event ) => updateField( 'mapping_template', event.target.value ) }
+								onScroll={ handleTemplateScroll }
+								spellCheck={ false }
+							/>
+						</div>
+					</BaseControl>
 
 					<Button
 						variant="primary"

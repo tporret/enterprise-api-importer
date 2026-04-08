@@ -6,6 +6,7 @@
  * Version:     1.2.0
  * Author:      tporret
  * License:     GPL-2.0-or-later
+ * Donate link: https://porretto.com/donate
  * Requires at least: 6.3
  * Requires PHP: 8.1
  * Tested up to: 6.9

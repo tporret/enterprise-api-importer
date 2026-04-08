@@ -22,6 +22,7 @@ const DEFAULT_JOB = {
 	custom_interval_minutes: 30,
 	filter_rules: '[]',
 	target_post_type: 'post',
+	featured_image_source_path: 'image.url',
 	lock_editing: 1,
 	title_template: '',
 	mapping_template: '',

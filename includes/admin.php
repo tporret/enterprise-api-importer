@@ -680,6 +680,7 @@ function eai_rest_sanitize_import_job_fields( array $params ) {
 	$recurrence       = isset( $params['recurrence'] ) ? sanitize_key( (string) $params['recurrence'] ) : 'off';
 	$custom_interval_minutes = isset( $params['custom_interval_minutes'] ) ? absint( $params['custom_interval_minutes'] ) : 0;
 	$target_post_type = isset( $params['target_post_type'] ) ? sanitize_key( (string) $params['target_post_type'] ) : 'post';
+	$featured_image_source_path = isset( $params['featured_image_source_path'] ) ? sanitize_text_field( (string) $params['featured_image_source_path'] ) : 'image.url';
 	$title_template   = isset( $params['title_template'] ) ? sanitize_text_field( (string) $params['title_template'] ) : '';
 	$template_raw     = isset( $params['mapping_template'] ) ? (string) $params['mapping_template'] : '';
 
@@ -721,6 +722,11 @@ function eai_rest_sanitize_import_job_fields( array $params ) {
 	}
 	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
 		$target_post_type = 'post';
+	}
+
+	$featured_image_source_path = trim( (string) $featured_image_source_path );
+	if ( '' === $featured_image_source_path ) {
+		$featured_image_source_path = 'image.url';
 	}
 
 	$title_template = mb_substr( trim( $title_template ), 0, 255 );
@@ -799,11 +805,12 @@ function eai_rest_sanitize_import_job_fields( array $params ) {
 		'custom_interval_minutes' => $custom_interval_minutes,
 		'filter_rules'            => $filter_rules_json,
 		'target_post_type'        => $target_post_type,
+		'featured_image_source_path' => $featured_image_source_path,
 		'title_template'          => $title_template,
 		'mapping_template'        => $mapping_template,
 		'lock_editing'            => isset( $params['lock_editing'] ) ? absint( (bool) $params['lock_editing'] ) : 1,
 	);
-	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d' );
+	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%d' );
 
 	return array( 'data' => $data, 'formats' => $formats );
 }

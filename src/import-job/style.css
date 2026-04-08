@@ -134,11 +134,57 @@
 	max-width: 440px;
 }
 
-.eapi-ij-template-editor textarea {
+.eapi-ij-template-editor {
+	display: flex;
+	border: 1px solid #8c8f94;
+	border-radius: 4px;
+	overflow: hidden;
+	background: #fff;
+}
+
+.eapi-ij-template-editor:focus-within {
+	border-color: #2271b1;
+	box-shadow: 0 0 0 1px #2271b1;
+}
+
+.eapi-ij-template-editor__gutter {
+	flex: 0 0 52px;
+	background: #f6f7f7;
+	border-right: 1px solid #dcdcde;
+	color: #646970;
+	font-family: Menlo, Consolas, Monaco, "Liberation Mono", monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	padding: 8px 8px 8px 0;
+	text-align: right;
+	user-select: none;
+	overflow: hidden;
+}
+
+.eapi-ij-template-editor__gutter-inner {
+	will-change: transform;
+	transform: translateY(0);
+}
+
+.eapi-ij-template-editor__gutter-line {
+	height: 1.5em;
+}
+
+.eapi-ij-template-editor__textarea {
+	flex: 1;
+	min-height: 260px;
+	padding: 8px 10px;
+	border: 0;
+	resize: vertical;
 	font-family: Menlo, Consolas, Monaco, "Liberation Mono", monospace;
 	font-size: 13px;
 	line-height: 1.5;
 	tab-size: 2;
+}
+
+.eapi-ij-template-editor__textarea:focus {
+	outline: none;
+	box-shadow: none;
 }
 
 /* JSON preview block (Data Dictionary + Raw Data) */
