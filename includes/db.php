@@ -47,6 +47,105 @@ function eai_db_logs_table(): string {
 }
 
 /**
+ * Returns the multisite network dashboard snapshot table name.
+ *
+ * @return string
+ */
+function eai_db_network_dashboard_table(): string {
+	global $wpdb;
+
+	return $wpdb->base_prefix . 'eapi_network_dashboard_sites';
+}
+
+/**
+ * Persists one multisite dashboard snapshot row.
+ *
+ * @param array<string, mixed> $snapshot Snapshot payload.
+ *
+ * @return bool
+ */
+function eai_db_save_network_snapshot( array $snapshot ): bool {
+	global $wpdb;
+
+	$table = eai_db_network_dashboard_table();
+	$data  = array(
+		'blog_id'            => absint( $snapshot['blog_id'] ?? 0 ),
+		'site_url'           => esc_url_raw( (string) ( $snapshot['site_url'] ?? '' ) ),
+		'site_name'          => sanitize_text_field( (string) ( $snapshot['site_name'] ?? '' ) ),
+		'overall_status'     => sanitize_key( (string) ( $snapshot['overall_status'] ?? 'green' ) ),
+		'health_status'      => sanitize_key( (string) ( $snapshot['health_status'] ?? 'green' ) ),
+		'security_status'    => sanitize_key( (string) ( $snapshot['security_status'] ?? 'green' ) ),
+		'performance_status' => sanitize_key( (string) ( $snapshot['performance_status'] ?? 'green' ) ),
+		'import_count'       => absint( $snapshot['import_count'] ?? 0 ),
+		'dashboard_data'     => wp_json_encode( $snapshot['dashboard_data'] ?? array() ),
+		'updated_at'         => current_time( 'mysql', true ),
+	);
+
+	if ( $data['blog_id'] <= 0 ) {
+		return false;
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	$result = $wpdb->replace(
+		$table,
+		$data,
+		array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s' )
+	);
+
+	return false !== $result;
+}
+
+/**
+ * Fetches multisite dashboard snapshots ordered by site name.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function eai_db_get_network_snapshots(): array {
+	if ( ! is_multisite() ) {
+		return array();
+	}
+
+	global $wpdb;
+	$table = eai_db_network_dashboard_table();
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$rows = $wpdb->get_results(
+		$wpdb->prepare(
+			'SELECT blog_id, site_url, site_name, overall_status, health_status, security_status, performance_status, import_count, dashboard_data, updated_at FROM %i ORDER BY site_name ASC',
+			$table
+		),
+		ARRAY_A
+	);
+
+	return is_array( $rows ) ? $rows : array();
+}
+
+/**
+ * Deletes one multisite dashboard snapshot row.
+ *
+ * @param int $blog_id Blog ID.
+ * @return bool
+ */
+function eai_db_delete_network_snapshot( int $blog_id ): bool {
+	if ( ! is_multisite() ) {
+		return false;
+	}
+
+	global $wpdb;
+	$table  = eai_db_network_dashboard_table();
+	$blog_id = absint( $blog_id );
+
+	if ( $blog_id <= 0 ) {
+		return false;
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	$deleted = $wpdb->delete( $table, array( 'blog_id' => $blog_id ), array( '%d' ) );
+
+	return false !== $deleted;
+}
+
+/**
  * Builds the cache key for one import config row.
  *
  * @param int $import_id Import job ID.

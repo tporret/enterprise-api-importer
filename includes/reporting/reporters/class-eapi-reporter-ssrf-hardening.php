@@ -31,9 +31,9 @@ class EAPI_Reporter_SSRF_Hardening extends EAPI_Reporter_Base {
 		}
 
 		return array(
-			'status' => 'red',
+			'status' => 'yellow',
 			'value'  => 'Open',
-			'detail' => 'No endpoint host or CIDR restrictions are configured. Any remote URL can be fetched.',
+			'detail' => 'No endpoint host or CIDR restrictions are configured yet. Any remote URL can currently be fetched until an allowlist is added.',
 		);
 	}
 }

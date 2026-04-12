@@ -17,6 +17,50 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+if ( ! defined( 'EAI_PLUGIN_BASENAME' ) ) {
+	define( 'EAI_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
+}
+
+/**
+ * Determines whether the plugin is currently network-active.
+ *
+ * @return bool
+ */
+function eai_is_network_active() {
+	if ( ! is_multisite() ) {
+		return false;
+	}
+
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	return is_plugin_active_for_network( EAI_PLUGIN_BASENAME );
+}
+
+/**
+ * Reverts unsupported multisite network activation when encountered at runtime.
+ *
+ * This catches activation paths that bypass or ignore the activation-hook guard,
+ * including WP-CLI based network activation.
+ *
+ * @return bool True when plugin loading should stop for this request.
+ */
+function eai_enforce_supported_multisite_activation_mode() {
+	if ( ! eai_is_network_active() ) {
+		return false;
+	}
+
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	deactivate_plugins( EAI_PLUGIN_BASENAME, true, true );
+	update_site_option( 'eai_network_activation_reverted', time() );
+
+	if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
+		WP_CLI::warning( 'Enterprise API Importer cannot remain network-activated. The plugin has been automatically reverted to the supported per-site activation model.' );
+	}
+
+	return true;
+}
+
 /**
  * Build a list of required dependency files that must exist in packaged installs.
  *
@@ -94,6 +138,10 @@ if ( '' !== $eai_dependency_error ) {
 		}
 	);
 
+	return;
+}
+
+if ( eai_enforce_supported_multisite_activation_mode() ) {
 	return;
 }
 

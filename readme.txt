@@ -14,6 +14,8 @@ Enterprise ETL importer for WordPress that turns complex API payloads into relia
 == Description ==
 Enterprise API Importer gives WordPress teams an enterprise-grade ETL pipeline for importing external API data with confidence.
 
+This readme is written for WordPress administrators and site owners evaluating or using the plugin from the Plugins screen.
+
 Use Enterprise API Importer to run clean, repeatable import workflows without sacrificing flexibility:
 
 - Multi-Connection Job Manager for organizing and scaling imports
@@ -27,6 +29,7 @@ Use Enterprise API Importer to run clean, repeatable import workflows without sa
 - Per-import Default Target Settings (post status, post author, comment status, pingback/trackback status)
 - Per-import editing lock toggle for imported posts (allow editing or enforce read-only)
 - Time-aware batch processing via WP-Cron to reduce timeout and memory-risk scenarios
+- Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site
 - **[New v1.2] Tableau-Style Reporting Dashboard:** Real-time metrics on environment health, security posture, and API performance with interactive charts, status indicators, and audit activity feed
 - **[New] Credential Encryption & REST Masking:**
   - AES-256-CBC encryption at rest for auth_token and auth_password fields
@@ -65,6 +68,8 @@ Built for real-world production workflows:
 2. Activate the plugin through the Plugins screen in WordPress.
 3. Go to EAPI -> Manage Imports to configure your API connections, filtering rules, target post type, and Twig templates.
 
+Multisite note: activate the plugin on each subsite that should run imports. If you also want the Network Admin summary dashboard, activate it on the primary site too. Do not use Network Activate; that mode is intentionally not supported.
+
 == Frequently Asked Questions ==
 = Does this require WP-CLI? =
 No. It uses native WP-Cron scheduling, but supports CLI triggers.
@@ -81,6 +86,9 @@ Yes. Use Post Title Template with Twig syntax. If left blank, the importer falls
 = Can I import into custom post types? =
 Yes. Select any public post type from Target Post Type. If the selected post type becomes unavailable, imports safely fall back to post.
 
+= How does this work on multisite? =
+Each subsite keeps its own import jobs, schedules, settings, and dashboard. A separate Network Admin dashboard can summarize active subsites when the plugin is also active on the primary site. Activate the plugin per site; Network Activate is intentionally blocked.
+
 = Does this import media attachments automatically from URL fields? =
 The plugin includes a secure media sideload helper foundation with source URL deduplication. Full field-level media mapping workflows can be added on top of this helper.
 
@@ -92,6 +100,9 @@ The following Twig tags are disallowed to prevent file inclusion and code inject
 
 = Can I allow imports from internal/private networks? =
 Yes, but not recommended for production. Go to Settings → Allow Internal Endpoints to permit RFC1918 and loopback addresses. For whitelisting specific hosts/CIDR blocks, use Settings → Allowed Endpoint Hosts and Settings → Allowed Endpoint CIDR Blocks.
+
+= Why does the dashboard show a security warning on a new install? =
+The SSRF Hardening check starts in a warning state until you configure Allowed Endpoint Hosts or Allowed Endpoint CIDR Blocks. That warning is there to remind you that outbound API access is still open until you add an allowlist.
 
 = What should I configure in EAPI → Settings first? =
 Start with Allowed Endpoint Hosts and list only trusted API domains. Leave Allow Internal Endpoints disabled unless you intentionally import from internal services. Add CIDR blocks only when you need additional IP-range restrictions.

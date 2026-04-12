@@ -27,6 +27,15 @@ return false;
 }
 
 /**
+ * Determines whether the current user can access network-level importer features.
+ *
+ * @return bool
+ */
+function eai_current_user_can_manage_network_imports() {
+	return is_multisite() && current_user_can( 'manage_network_options' );
+}
+
+/**
  * Registers admin menu pages.
  */
 function eai_add_admin_pages() {
@@ -81,6 +90,28 @@ add_submenu_page(
 );
 }
 add_action( 'admin_menu', 'eai_add_admin_pages' );
+
+/**
+ * Registers multisite-only Network Admin pages.
+ *
+ * @return void
+ */
+function eai_add_network_admin_pages() {
+	if ( ! eai_current_user_can_manage_network_imports() ) {
+		return;
+	}
+
+	add_menu_page(
+		__( 'Enterprise API Importer Network', 'enterprise-api-importer' ),
+		__( 'EAPI Network', 'enterprise-api-importer' ),
+		'manage_network_options',
+		'eapi-network-dashboard',
+		'eai_render_network_dashboard_page',
+		'dashicons-database-import',
+		58
+	);
+}
+add_action( 'network_admin_menu', 'eai_add_network_admin_pages' );
 
 /**
  * Registers admin post handlers.
@@ -1125,20 +1156,34 @@ function eai_rest_template_sync_import_job( WP_REST_Request $request ) {
  * Renders admin notices for this plugin.
  */
 function eai_render_admin_notices() {
-// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only notice code for admin UI messaging.
-$notice_code = isset( $_GET['eai_notice'] ) ? sanitize_key( (string) wp_unslash( $_GET['eai_notice'] ) ) : '';
-if ( '' === $notice_code ) {
-return;
-}
+	$network_activation_reverted = (int) get_site_option( 'eai_network_activation_reverted', 0 );
+	if ( $network_activation_reverted > 0 && ( is_network_admin() || is_main_site() ) ) {
+		echo '<div class="notice notice-warning"><p>';
+		echo esc_html__( 'Multisite note: a network activation attempt was automatically reverted. Keep Enterprise API Importer active on the primary site for the Network Admin dashboard, and activate it separately on each subsite that should run imports.', 'enterprise-api-importer' );
+		echo '</p></div>';
+		delete_site_option( 'eai_network_activation_reverted' );
+	}
 
-$messages = array(
-'import_saved'   => array( 'success', __( 'Import job saved.', 'enterprise-api-importer' ) ),
-'import_deleted' => array( 'success', __( 'Import job deleted.', 'enterprise-api-importer' ) ),
-'import_started' => array( 'success', __( 'Import queued successfully.', 'enterprise-api-importer' ) ),
-'template_sync_started' => array( 'success', __( 'Template sync started. Existing imported items will be re-rendered for this import job.', 'enterprise-api-importer' ) ),
-'schedule_now'   => array( 'success', __( 'Import scheduled to run now.', 'enterprise-api-importer' ) ),
-'import_error'   => array( 'error', __( 'The import request failed. Please review your inputs and try again.', 'enterprise-api-importer' ) ),
-'schedule_error' => array( 'error', __( 'Unable to schedule this import right now.', 'enterprise-api-importer' ) ),
+	if ( eai_should_render_primary_site_dashboard_notice() ) {
+		echo '<div class="notice notice-warning"><p>';
+		echo esc_html__( 'Multisite note: the Network Admin dashboard appears only when Enterprise API Importer is also active on the primary site. Keep this subsite active for local imports, and activate the plugin on the primary site if you want the network-level dashboard.', 'enterprise-api-importer' );
+		echo '</p></div>';
+	}
+
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only notice code for admin UI messaging.
+	$notice_code = isset( $_GET['eai_notice'] ) ? sanitize_key( (string) wp_unslash( $_GET['eai_notice'] ) ) : '';
+	if ( '' === $notice_code ) {
+		return;
+	}
+
+	$messages = array(
+		'import_saved'   => array( 'success', __( 'Import job saved.', 'enterprise-api-importer' ) ),
+		'import_deleted' => array( 'success', __( 'Import job deleted.', 'enterprise-api-importer' ) ),
+		'import_started' => array( 'success', __( 'Import queued successfully.', 'enterprise-api-importer' ) ),
+		'template_sync_started' => array( 'success', __( 'Template sync started. Existing imported items will be re-rendered for this import job.', 'enterprise-api-importer' ) ),
+		'schedule_now'   => array( 'success', __( 'Import scheduled to run now.', 'enterprise-api-importer' ) ),
+		'import_error'   => array( 'error', __( 'The import request failed. Please review your inputs and try again.', 'enterprise-api-importer' ) ),
+		'schedule_error' => array( 'error', __( 'Unable to schedule this import right now.', 'enterprise-api-importer' ) ),
 		'settings_saved' => array( 'success', __( 'Settings saved.', 'enterprise-api-importer' ) ),
 	);
 
@@ -1159,6 +1204,33 @@ $messages = array(
 			delete_transient( 'eai_last_import_save_error' );
 		}
 	}
+}
+
+/**
+ * Determines whether to show the primary-site activation reminder in multisite.
+ *
+ * @return bool
+ */
+function eai_should_render_primary_site_dashboard_notice() {
+	if ( ! is_multisite() || is_network_admin() || is_main_site() ) {
+		return false;
+	}
+
+	$main_site_id = function_exists( 'get_main_site_id' ) ? (int) get_main_site_id() : 1;
+
+	if ( get_current_blog_id() === $main_site_id ) {
+		return false;
+	}
+
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	if ( is_plugin_active_for_network( EAI_PLUGIN_BASENAME ) ) {
+		return false;
+	}
+
+	$active_plugins = (array) get_blog_option( $main_site_id, 'active_plugins', array() );
+
+	return ! in_array( EAI_PLUGIN_BASENAME, $active_plugins, true );
 }
 
 /**
@@ -3603,6 +3675,160 @@ function eai_render_dashboard_page() {
 		wp_die( esc_html__( 'You are not allowed to access this page.', 'enterprise-api-importer' ) );
 	}
 	echo '<div id="eapi-dashboard-root" class="wrap"></div>';
+}
+
+/**
+ * Renders one dashboard status badge for the network summary table.
+ *
+ * @param string $status Status key.
+ * @return string
+ */
+function eai_get_network_dashboard_status_badge( string $status ): string {
+	$status = sanitize_key( $status );
+	$map    = array(
+		'green'  => array(
+			'label' => __( 'Healthy', 'enterprise-api-importer' ),
+			'bg'    => '#dcfce7',
+			'fg'    => '#166534',
+		),
+		'yellow' => array(
+			'label' => __( 'Warning', 'enterprise-api-importer' ),
+			'bg'    => '#fef3c7',
+			'fg'    => '#92400e',
+		),
+		'red'    => array(
+			'label' => __( 'Critical', 'enterprise-api-importer' ),
+			'bg'    => '#fee2e2',
+			'fg'    => '#991b1b',
+		),
+		'gray'   => array(
+			'label' => __( 'Unknown', 'enterprise-api-importer' ),
+			'bg'    => '#e5e7eb',
+			'fg'    => '#374151',
+		),
+	);
+
+	if ( ! isset( $map[ $status ] ) ) {
+		$status = 'gray';
+	}
+
+	$style = sprintf(
+		'display:inline-block;padding:4px 10px;border-radius:999px;background:%1$s;color:%2$s;font-weight:600;font-size:12px;line-height:1.4;',
+		esc_attr( $map[ $status ]['bg'] ),
+		esc_attr( $map[ $status ]['fg'] )
+	);
+
+	return sprintf( '<span style="%1$s">%2$s</span>', $style, esc_html( $map[ $status ]['label'] ) );
+}
+
+/**
+ * Renders the multisite Network Admin dashboard.
+ *
+ * @return void
+ */
+function eai_render_network_dashboard_page() {
+	if ( ! eai_current_user_can_manage_network_imports() ) {
+		wp_die( esc_html__( 'You are not allowed to access this page.', 'enterprise-api-importer' ) );
+	}
+
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Refresh action validates a dedicated nonce.
+	$refresh = isset( $_GET['eai_refresh_network'] ) && '1' === (string) wp_unslash( $_GET['eai_refresh_network'] );
+	if ( $refresh ) {
+		check_admin_referer( 'eai_refresh_network_dashboard' );
+	}
+
+	$snapshots = eai_db_get_network_snapshots();
+	if ( $refresh || empty( $snapshots ) ) {
+		$snapshots = eai_refresh_network_dashboard_snapshots( $refresh );
+	}
+
+	$summary = array(
+		'total'    => count( $snapshots ),
+		'healthy'  => 0,
+		'warning'  => 0,
+		'critical' => 0,
+	);
+
+	foreach ( $snapshots as $snapshot ) {
+		switch ( $snapshot['overall_status'] ?? '' ) {
+			case 'red':
+				++$summary['critical'];
+				break;
+			case 'yellow':
+				++$summary['warning'];
+				break;
+			default:
+				++$summary['healthy'];
+				break;
+		}
+	}
+
+	$refresh_url = wp_nonce_url(
+		add_query_arg(
+			array(
+				'page'                 => 'eapi-network-dashboard',
+				'eai_refresh_network'  => '1',
+			),
+			network_admin_url( 'admin.php' )
+		),
+		'eai_refresh_network_dashboard'
+	);
+
+	echo '<div class="wrap">';
+	echo '<h1>' . esc_html__( 'Enterprise API Importer Network Dashboard', 'enterprise-api-importer' ) . '</h1>';
+	echo '<p>' . esc_html__( 'This view summarizes every subsite where Enterprise API Importer is activated. Site admins continue to manage and monitor imports from each subsite dashboard.', 'enterprise-api-importer' ) . '</p>';
+	echo '<p><a href="' . esc_url( $refresh_url ) . '" class="button button-secondary">' . esc_html__( 'Refresh Network Snapshot', 'enterprise-api-importer' ) . '</a></p>';
+
+	echo '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:20px 0 24px;">';
+	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Sites Monitored', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;">' . esc_html( number_format_i18n( $summary['total'] ) ) . '</div></div>';
+	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Healthy Sites', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#166534;">' . esc_html( number_format_i18n( $summary['healthy'] ) ) . '</div></div>';
+	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Warnings', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#92400e;">' . esc_html( number_format_i18n( $summary['warning'] ) ) . '</div></div>';
+	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Critical Sites', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#991b1b;">' . esc_html( number_format_i18n( $summary['critical'] ) ) . '</div></div>';
+	echo '</div>';
+
+	if ( empty( $snapshots ) ) {
+		echo '<div class="notice notice-info inline"><p>' . esc_html__( 'No multisite snapshots are available yet. Activate the plugin on at least one subsite, or refresh after a site dashboard has loaded.', 'enterprise-api-importer' ) . '</p></div>';
+		echo '</div>';
+		return;
+	}
+
+	echo '<table class="widefat striped">';
+	echo '<thead><tr>';
+	echo '<th>' . esc_html__( 'Site', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Overall', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Health', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Security', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Performance', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Import Jobs', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Updated', 'enterprise-api-importer' ) . '</th>';
+	echo '<th>' . esc_html__( 'Actions', 'enterprise-api-importer' ) . '</th>';
+	echo '</tr></thead><tbody>';
+
+	foreach ( $snapshots as $snapshot ) {
+		$blog_id        = absint( $snapshot['blog_id'] ?? 0 );
+		$site_name      = (string) ( $snapshot['site_name'] ?? '' );
+		$site_url       = (string) ( $snapshot['site_url'] ?? '' );
+		$dashboard_link = $blog_id > 0 ? get_admin_url( $blog_id, 'admin.php?page=eapi-dashboard' ) : '';
+		$updated_at     = isset( $snapshot['updated_at'] ) ? mysql2date( get_option( 'date_format', 'F j, Y' ) . ' ' . get_option( 'time_format', 'g:i a' ), (string) $snapshot['updated_at'], false ) : '';
+
+		echo '<tr>';
+		echo '<td><strong>' . esc_html( $site_name ) . '</strong><br /><a href="' . esc_url( $site_url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $site_url ) . '</a></td>';
+		echo '<td>' . wp_kses_post( eai_get_network_dashboard_status_badge( (string) ( $snapshot['overall_status'] ?? 'gray' ) ) ) . '</td>';
+		echo '<td>' . wp_kses_post( eai_get_network_dashboard_status_badge( (string) ( $snapshot['health_status'] ?? 'gray' ) ) ) . '</td>';
+		echo '<td>' . wp_kses_post( eai_get_network_dashboard_status_badge( (string) ( $snapshot['security_status'] ?? 'gray' ) ) ) . '</td>';
+		echo '<td>' . wp_kses_post( eai_get_network_dashboard_status_badge( (string) ( $snapshot['performance_status'] ?? 'gray' ) ) ) . '</td>';
+		echo '<td>' . esc_html( number_format_i18n( absint( $snapshot['import_count'] ?? 0 ) ) ) . '</td>';
+		echo '<td>' . esc_html( $updated_at ) . '</td>';
+		echo '<td>';
+		if ( '' !== $dashboard_link ) {
+			echo '<a class="button button-small" href="' . esc_url( $dashboard_link ) . '">' . esc_html__( 'Open Site Dashboard', 'enterprise-api-importer' ) . '</a>';
+		}
+		echo '</td>';
+		echo '</tr>';
+	}
+
+	echo '</tbody></table>';
+	echo '</div>';
 }
 
 /**

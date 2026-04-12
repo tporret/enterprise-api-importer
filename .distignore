@@ -17,6 +17,7 @@
 /enterprise-api-importer.zip
 .distignore
 .gitignore
+testsite.md
 
 # Safe vendor size trims (non-runtime docs only).
 /vendor/**/README*

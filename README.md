@@ -3,8 +3,13 @@
 Enterprise API Importer is a WordPress plugin for secure, repeatable API-to-WordPress ETL.
 It is built for teams that need enterprise-grade reliability without losing flexibility.
 
-If you are non-technical: this plugin lets you connect external APIs and keep WordPress content in sync.
-If you are technical: you get a staged, idempotent, template-driven pipeline with cron orchestration and detailed run logs.
+This README is the technical overview for developers, maintainers, and operators working from the repository.
+If you want the WordPress admin-facing plugin summary, installation help, and FAQ copy, use [readme.txt](readme.txt).
+
+At a glance:
+
+- Site builders get a guided import workspace, schedule controls, safety checks, and per-site dashboards.
+- Developers get a staged, idempotent, template-driven pipeline with REST tooling, custom tables, and extendable reporters.
 
 ## Why This Plugin Exists
 
@@ -21,6 +26,7 @@ It gives you:
 ## Core Capabilities
 
 - Multi-import job manager in wp-admin.
+- Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site.
 - External API extraction with flexible auth methods (`none`, `bearer`, `api_key_custom`, `basic_auth`).
 - JSON array path resolution for nested payloads.
 - Rule-based pre-stage filtering (AND logic).
@@ -35,6 +41,34 @@ It gives you:
 - Health and schedule dashboard with run stats and trigger source visibility.
 - Endpoint test, API data preview, and Twig dry-run tools before production execution.
 - Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
+
+## Multisite Operation
+
+In WordPress multisite, the plugin follows a per-site execution model with an optional network summary view.
+
+- Activate the plugin on each subsite that should actually run imports.
+- If you want the Network Admin dashboard, also activate the plugin on the primary site.
+- Network Activate is intentionally blocked.
+- Site admins continue to use each subsite dashboard; the Network Admin dashboard is a summary layer, not a replacement for local job management.
+
+## Default Security Posture
+
+The plugin ships locked down for production-oriented installs.
+
+- HTTPS is required for remote endpoints unless you explicitly loosen that via code.
+- Private and loopback targets are blocked by default unless you opt into internal endpoints.
+- The SSRF Hardening reporter shows a warning on new installs until you configure an endpoint allowlist.
+- Once Allowed Endpoint Hosts or Allowed Endpoint CIDR Blocks are configured, that reporter moves to a healthy state.
+
+## Repository Audience
+
+Use this repository README when you need technical context such as:
+
+- how the import pipeline is structured
+- what the reporting subsystem exposes
+- how multisite activation is supposed to work
+- what security defaults and extension points exist
+- how to reason about packaging or testing the plugin from source
 
 ## What Was Recently Added
 
@@ -171,6 +205,12 @@ GET /wp-json/eapi/v1/dashboard?refresh=1
 - `@wordpress/api-fetch` for REST communication
 
 **Menu Location:** `EAPI → Dashboard` (requires `read` capability)
+
+#### Multisite Dashboard Behavior
+
+- Subsite dashboards remain site-scoped and continue to show each site's own import health.
+- The Network Admin dashboard is populated from multisite snapshot rows stored in a network-level table.
+- Unsupported network activation is automatically rejected so the supported model stays explicit.
 
 #### Extending the Reporting System
 

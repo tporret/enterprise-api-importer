@@ -13,6 +13,10 @@ if ( ! defined( 'EAI_DB_SCHEMA_VERSION' ) ) {
 	define( 'EAI_DB_SCHEMA_VERSION', '20260410-1' );
 }
 
+if ( ! defined( 'EAI_NETWORK_DB_SCHEMA_VERSION' ) ) {
+	define( 'EAI_NETWORK_DB_SCHEMA_VERSION', '20260412-1' );
+}
+
 /**
  * Ensures template-management capability exists for administrators.
  *
@@ -31,7 +35,11 @@ function eai_sync_template_management_capabilities() {
  *
  * Creates and migrates ETL tables required by the import pipeline.
  */
-function eai_activate_plugin() {
+function eai_activate_plugin( $network_wide = false ) {
+	if ( is_multisite() && $network_wide ) {
+		eai_block_network_activation();
+	}
+
 	global $wpdb;
 
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -114,7 +122,81 @@ function eai_activate_plugin() {
 		wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'eapi_daily_garbage_collection' );
 	}
 
+	if ( is_multisite() ) {
+		eai_activate_network_dashboard_storage();
+	}
+
 	update_option( 'eai_db_schema_version', EAI_DB_SCHEMA_VERSION );
+}
+
+/**
+ * Prevents unsupported network activation in multisite installs.
+ *
+ * @return void
+ */
+function eai_block_network_activation() {
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	deactivate_plugins( EAI_PLUGIN_BASENAME, true, true );
+
+	wp_die(
+		esc_html__( 'Enterprise API Importer cannot be network-activated. Activate it on the primary site to expose the Network Admin dashboard, then activate it only on the subsites that should run imports.', 'enterprise-api-importer' ),
+		esc_html__( 'Network activation is not supported', 'enterprise-api-importer' ),
+		array(
+			'back_link' => true,
+		)
+	);
+}
+
+/**
+ * Creates multisite storage used by the Network Admin dashboard.
+ *
+ * @return void
+ */
+function eai_activate_network_dashboard_storage() {
+	global $wpdb;
+
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+	$charset_collate = $wpdb->get_charset_collate();
+	$table           = eai_db_network_dashboard_table();
+	$sql             = "CREATE TABLE {$table} (
+		blog_id bigint(20) unsigned NOT NULL,
+		site_url varchar(255) NOT NULL,
+		site_name varchar(191) NOT NULL,
+		overall_status varchar(20) NOT NULL DEFAULT 'green',
+		health_status varchar(20) NOT NULL DEFAULT 'green',
+		security_status varchar(20) NOT NULL DEFAULT 'green',
+		performance_status varchar(20) NOT NULL DEFAULT 'green',
+		import_count bigint(20) unsigned NOT NULL DEFAULT 0,
+		dashboard_data longtext NULL,
+		updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY  (blog_id),
+		KEY overall_status (overall_status),
+		KEY updated_at (updated_at)
+	) {$charset_collate};";
+
+	dbDelta( $sql );
+	update_site_option( 'eai_network_db_schema_version', EAI_NETWORK_DB_SCHEMA_VERSION );
+}
+
+/**
+ * Ensures multisite network schema updates run for existing installs.
+ *
+ * @return void
+ */
+function eai_maybe_upgrade_network_schema() {
+	if ( ! is_multisite() ) {
+		return;
+	}
+
+	$installed_version = (string) get_site_option( 'eai_network_db_schema_version', '' );
+
+	if ( EAI_NETWORK_DB_SCHEMA_VERSION === $installed_version ) {
+		return;
+	}
+
+	eai_activate_network_dashboard_storage();
 }
 
 /**
@@ -256,6 +338,10 @@ function eai_ensure_imports_custom_meta_mappings_column() {
  */
 function eai_deactivate_plugin() {
 	wp_clear_scheduled_hook( 'eapi_daily_garbage_collection' );
+
+	if ( is_multisite() ) {
+		eai_db_delete_network_snapshot( get_current_blog_id() );
+	}
 }
 
 /**
@@ -264,6 +350,10 @@ function eai_deactivate_plugin() {
  * @return void
  */
 function eai_maybe_upgrade_schema() {
+	if ( is_multisite() ) {
+		eai_maybe_upgrade_network_schema();
+	}
+
 	eai_sync_template_management_capabilities();
 	eai_ensure_imports_auth_columns();
 	eai_ensure_imports_featured_image_column();
