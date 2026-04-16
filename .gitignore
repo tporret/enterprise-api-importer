@@ -43,3 +43,5 @@ debug.log
 docs/
 .wordpress-org/
 testsite.md
+.agents/
+skills-lock.json

@@ -152,6 +152,7 @@ require_once __DIR__ . '/includes/class-eapi-imports-list-table.php';
 require_once __DIR__ . '/includes/content.php';
 require_once __DIR__ . '/includes/import.php';
 require_once __DIR__ . '/includes/admin.php';
+require_once __DIR__ . '/includes/rest.php';
 require_once __DIR__ . '/includes/reporting/reporting.php';
 
 register_activation_hook( __FILE__, 'eai_activate_plugin' );
