@@ -21,13 +21,13 @@ $temp_table    = $wpdb->prefix . 'custom_import_temp';
 $network_table = $wpdb->base_prefix . 'eapi_network_dashboard_sites';
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $imports_table ) );
+$wpdb->query( "DROP TABLE IF EXISTS {$imports_table}" );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $logs_table ) );
+$wpdb->query( "DROP TABLE IF EXISTS {$logs_table}" );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $temp_table ) );
+$wpdb->query( "DROP TABLE IF EXISTS {$temp_table}" );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $network_table ) );
+$wpdb->query( "DROP TABLE IF EXISTS {$network_table}" );
 
 delete_option( 'eai_db_schema_version' );
 delete_option( 'eai_active_import_run' );
