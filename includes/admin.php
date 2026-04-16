@@ -1679,13 +1679,11 @@ function eai_get_network_dashboard_status_badge( string $status ): string {
 		$status = 'gray';
 	}
 
-	$style = sprintf(
-		'display:inline-block;padding:4px 10px;border-radius:999px;background:%1$s;color:%2$s;font-weight:600;font-size:12px;line-height:1.4;',
-		esc_attr( $map[ $status ]['bg'] ),
-		esc_attr( $map[ $status ]['fg'] )
+	return sprintf(
+		'<span class="eai-network-status-badge eai-network-status-badge--%1$s">%2$s</span>',
+		esc_attr( $status ),
+		esc_html( $map[ $status ]['label'] )
 	);
-
-	return sprintf( '<span style="%1$s">%2$s</span>', $style, esc_html( $map[ $status ]['label'] ) );
 }
 
 /**
@@ -1746,11 +1744,11 @@ function eai_render_network_dashboard_page() {
 	echo '<p>' . esc_html__( 'This view summarizes every subsite where Enterprise API Importer is activated. Site admins continue to manage and monitor imports from each subsite dashboard.', 'enterprise-api-importer' ) . '</p>';
 	echo '<p><a href="' . esc_url( $refresh_url ) . '" class="button button-secondary">' . esc_html__( 'Refresh Network Snapshot', 'enterprise-api-importer' ) . '</a></p>';
 
-	echo '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:20px 0 24px;">';
-	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Sites Monitored', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;">' . esc_html( number_format_i18n( $summary['total'] ) ) . '</div></div>';
-	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Healthy Sites', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#166534;">' . esc_html( number_format_i18n( $summary['healthy'] ) ) . '</div></div>';
-	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Warnings', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#92400e;">' . esc_html( number_format_i18n( $summary['warning'] ) ) . '</div></div>';
-	echo '<div style="min-width:180px;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:16px;"><strong>' . esc_html__( 'Critical Sites', 'enterprise-api-importer' ) . '</strong><div style="font-size:28px;line-height:1.2;margin-top:8px;color:#991b1b;">' . esc_html( number_format_i18n( $summary['critical'] ) ) . '</div></div>';
+	echo '<div class="eai-network-summary">';
+	echo '<div class="eai-network-summary-card"><strong class="eai-network-summary-card-title">' . esc_html__( 'Sites Monitored', 'enterprise-api-importer' ) . '</strong><div class="eai-network-summary-card-value">' . esc_html( number_format_i18n( $summary['total'] ) ) . '</div></div>';
+	echo '<div class="eai-network-summary-card eai-network-summary-card--healthy"><strong class="eai-network-summary-card-title">' . esc_html__( 'Healthy Sites', 'enterprise-api-importer' ) . '</strong><div class="eai-network-summary-card-value">' . esc_html( number_format_i18n( $summary['healthy'] ) ) . '</div></div>';
+	echo '<div class="eai-network-summary-card eai-network-summary-card--warning"><strong class="eai-network-summary-card-title">' . esc_html__( 'Warnings', 'enterprise-api-importer' ) . '</strong><div class="eai-network-summary-card-value">' . esc_html( number_format_i18n( $summary['warning'] ) ) . '</div></div>';
+	echo '<div class="eai-network-summary-card eai-network-summary-card--critical"><strong class="eai-network-summary-card-title">' . esc_html__( 'Critical Sites', 'enterprise-api-importer' ) . '</strong><div class="eai-network-summary-card-value">' . esc_html( number_format_i18n( $summary['critical'] ) ) . '</div></div>';
 	echo '</div>';
 
 	if ( empty( $snapshots ) ) {
@@ -1799,7 +1797,7 @@ function eai_render_network_dashboard_page() {
 }
 
 /**
- * Enqueues inline admin page styles for the EAPI manage-list and schedules pages.
+ * Enqueues inline admin page styles for the EAPI manage-list, schedules, and network dashboard pages.
  *
  * Styles are anchored to handles registered with a false source so they are output
  * in the <head> via wp_head() rather than as raw inline <style> tags in page content.
@@ -1807,10 +1805,11 @@ function eai_render_network_dashboard_page() {
  * @param string $hook_suffix Current admin page hook suffix.
  */
 function eai_enqueue_admin_page_styles( string $hook_suffix ): void {
-	$is_manage    = 'toplevel_page_eapi-manage' === $hook_suffix;
-	$is_schedules = 'eapi_page_eapi-schedules' === $hook_suffix;
+	$is_manage          = 'toplevel_page_eapi-manage' === $hook_suffix;
+	$is_schedules       = 'eapi_page_eapi-schedules' === $hook_suffix;
+	$is_network_dashboard = 'toplevel_page_eapi-network-dashboard' === $hook_suffix;
 
-	if ( ! $is_manage && ! $is_schedules ) {
+	if ( ! $is_manage && ! $is_schedules && ! $is_network_dashboard ) {
 		return;
 	}
 
@@ -1927,6 +1926,28 @@ function eai_enqueue_admin_page_styles( string $hook_suffix ): void {
 		.eapi-mini-bar.is-updated {
 			background: #0d9488;
 		}
+
+		.eapi-mini-bar--h-2 { height: 2px; }
+		.eapi-mini-bar--h-3 { height: 3px; }
+		.eapi-mini-bar--h-4 { height: 4px; }
+		.eapi-mini-bar--h-5 { height: 5px; }
+		.eapi-mini-bar--h-6 { height: 6px; }
+		.eapi-mini-bar--h-7 { height: 7px; }
+		.eapi-mini-bar--h-8 { height: 8px; }
+		.eapi-mini-bar--h-9 { height: 9px; }
+		.eapi-mini-bar--h-10 { height: 10px; }
+		.eapi-mini-bar--h-11 { height: 11px; }
+		.eapi-mini-bar--h-12 { height: 12px; }
+		.eapi-mini-bar--h-13 { height: 13px; }
+		.eapi-mini-bar--h-14 { height: 14px; }
+		.eapi-mini-bar--h-15 { height: 15px; }
+		.eapi-mini-bar--h-16 { height: 16px; }
+		.eapi-mini-bar--h-17 { height: 17px; }
+		.eapi-mini-bar--h-18 { height: 18px; }
+		.eapi-mini-bar--h-19 { height: 19px; }
+		.eapi-mini-bar--h-20 { height: 20px; }
+		.eapi-mini-bar--h-21 { height: 21px; }
+		.eapi-mini-bar--h-22 { height: 22px; }
 
 		.eapi-trend-empty {
 			color: var(--eapi-slate-500);
@@ -2125,6 +2146,72 @@ function eai_enqueue_admin_page_styles( string $hook_suffix ): void {
 		wp_enqueue_style( 'eapi-schedules' );
 		wp_add_inline_style( 'eapi-schedules', $shared_css );
 		wp_add_inline_style( 'eapi-schedules', $schedules_css );
+	}
+
+	if ( $is_network_dashboard ) {
+		$network_dashboard_css = "
+			.eai-network-summary {
+				display:flex;
+				gap:16px;
+				flex-wrap:wrap;
+				margin:20px 0 24px;
+			}
+			.eai-network-summary-card {
+				min-width:180px;
+				background:#fff;
+				border:1px solid #dcdcde;
+				border-radius:8px;
+				padding:16px;
+			}
+			.eai-network-summary-card-title {
+				display:block;
+				font-weight:700;
+				margin-bottom:8px;
+			}
+			.eai-network-summary-card-value {
+				font-size:28px;
+				line-height:1.2;
+				margin-top:8px;
+			}
+			.eai-network-summary-card--healthy .eai-network-summary-card-value {
+				color:#166534;
+			}
+			.eai-network-summary-card--warning .eai-network-summary-card-value {
+				color:#92400e;
+			}
+			.eai-network-summary-card--critical .eai-network-summary-card-value {
+				color:#991b1b;
+			}
+			.eai-network-status-badge {
+				display:inline-block;
+				padding:4px 10px;
+				border-radius:999px;
+				font-weight:600;
+				font-size:12px;
+				line-height:1.4;
+			}
+			.eai-network-status-badge--green {
+				background:#dcfce7;
+				color:#166534;
+			}
+			.eai-network-status-badge--yellow {
+				background:#fef3c7;
+				color:#92400e;
+			}
+			.eai-network-status-badge--red {
+				background:#fee2e2;
+				color:#991b1b;
+			}
+			.eai-network-status-badge--gray {
+				background:#e5e7eb;
+				color:#374151;
+			}
+		";
+
+		// phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- Inline-only handle; no src URL.
+		wp_register_style( 'eapi-network-dashboard', false, array(), false );
+		wp_enqueue_style( 'eapi-network-dashboard' );
+		wp_add_inline_style( 'eapi-network-dashboard', $network_dashboard_css );
 	}
 }
 add_action( 'admin_enqueue_scripts', 'eai_enqueue_admin_page_styles' );

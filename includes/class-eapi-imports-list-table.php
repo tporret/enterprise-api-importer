@@ -263,8 +263,8 @@ class EAI_Imports_List_Table extends WP_List_Table {
 			$updated_height = max( 2, (int) round( ( $updated / $max_value ) * 22 ) );
 
 			$html .= '<span class="eapi-spark-pair">';
-			$html .= '<span class="eapi-mini-bar is-created" style="height:' . esc_attr( (string) $created_height ) . 'px"></span>';
-			$html .= '<span class="eapi-mini-bar is-updated" style="height:' . esc_attr( (string) $updated_height ) . 'px"></span>';
+			$html .= '<span class="eapi-mini-bar is-created eapi-mini-bar--h-' . esc_attr( (string) $created_height ) . '"></span>';
+			$html .= '<span class="eapi-mini-bar is-updated eapi-mini-bar--h-' . esc_attr( (string) $updated_height ) . '"></span>';
 			$html .= '</span>';
 		}
 
