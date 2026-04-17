@@ -45,3 +45,6 @@ docs/
 testsite.md
 .agents/
 skills-lock.json
+.dist/
+dist/
+package-release.sh

@@ -3,6 +3,7 @@
 /.github
 /node_modules
 /dist
+/.dist
 /docs
 /.docs
 /src
@@ -20,6 +21,7 @@
 testsite.md
 .agents/
 skills-lock.json
+package-release.sh
 # Safe vendor size trims (non-runtime docs only).
 /vendor/**/README*
 /vendor/**/CHANGELOG*
