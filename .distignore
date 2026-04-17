@@ -22,6 +22,7 @@ testsite.md
 .agents/
 skills-lock.json
 package-release.sh
+*.sh
 # Safe vendor size trims (non-runtime docs only).
 /vendor/**/README*
 /vendor/**/CHANGELOG*
