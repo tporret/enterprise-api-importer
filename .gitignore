@@ -48,3 +48,5 @@ skills-lock.json
 .dist/
 dist/
 package-release.sh
+.svn-release/
+prepare-svn-release.sh
