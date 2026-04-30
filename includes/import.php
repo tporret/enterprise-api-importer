@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-add_action( 'tporapdi_process_import_queue', 'tporapdi_handle_scheduled_import_batch' );
+add_action( 'tporapdi_process_import_queue', 'tporapdi_handle_scheduled_import_batch', 10, 1 );
 add_action( 'tporapdi_immediate_import_trigger', 'tporapdi_handle_import_batch_hook', 10, 2 );
 add_action( 'tporapdi_recurring_import_trigger', 'tporapdi_handle_import_batch_hook', 10, 2 );
 add_action( 'tporapdi_daily_garbage_collection', array( 'TPORAPDI_Import_Processor', 'run_garbage_collection' ) );
@@ -328,7 +328,9 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
 		return $validated_endpoint;
 	}
 
-	$cache_key      = 'tporapdi_api_cache_' . md5( $endpoint );
+	// Auth credentials are included in the fingerprint so two jobs hitting the same
+	// endpoint URL with different tokens cannot share each other's cached responses.
+	$cache_key      = 'tporapdi_api_cache_' . md5( $endpoint . '|' . $auth_method . '|' . $token . '|' . $auth_header_name . '|' . $auth_username . '|' . $auth_password );
 	$cached_payload = false;
 	$used_cache     = false;
 
@@ -462,31 +464,40 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 		$selected_array = tporapdi_apply_filter_rules_to_records( $selected_array, $filter_rules );
 	}
 
-	$serialized_selected_array = wp_json_encode( $selected_array, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+	// Normalize to a flat list of items and stage in fixed-size chunks.
+	// This bounds the JSON blob size in each staging row and ensures that a
+	// cron timeout can only cause re-processing of one small chunk rather than
+	// the entire API payload.
+	$items              = tporapdi_normalize_staged_items( $selected_array );
+	$row_count          = count( $items );
+	$staging_chunk_size = max( 1, (int) apply_filters( 'tporapdi_staging_chunk_size', 50 ) );
+	$chunks             = array_chunk( $items, $staging_chunk_size );
+	$staging_rows       = 0;
 
-	if ( false === $serialized_selected_array ) {
-		return new WP_Error( 'tporapdi_json_encode_failed', __( 'Failed to serialize extracted array for staging.', 'tporret-api-data-importer' ) );
-	}
-
-	$insert_id = tporapdi_db_insert_staging_payload( $import_id, $serialized_selected_array );
-	if ( is_wp_error( $insert_id ) ) {
-		return $insert_id;
-	}
-
-	$row_count = 0;
-	if ( is_array( $selected_array ) ) {
-		if ( tporapdi_array_is_list( $selected_array ) ) {
-			$row_count = count( $selected_array );
-		} elseif ( ! empty( $selected_array ) ) {
-			$row_count = 1;
+	foreach ( $chunks as $chunk ) {
+		if ( empty( $chunk ) ) {
+			continue;
 		}
+
+		$serialized_chunk = wp_json_encode( $chunk, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+
+		if ( false === $serialized_chunk ) {
+			return new WP_Error( 'tporapdi_json_encode_failed', __( 'Failed to serialize extracted array for staging.', 'tporret-api-data-importer' ) );
+		}
+
+		$insert_id = tporapdi_db_insert_staging_payload( $import_id, $serialized_chunk );
+		if ( is_wp_error( $insert_id ) ) {
+			return $insert_id;
+		}
+
+		++$staging_rows;
 	}
 
 	return array(
-		'import_id'  => $import_id,
-		'insert_id'  => (int) $insert_id,
-		'used_cache' => $used_cache,
-		'row_count'  => (int) $row_count,
+		'import_id'    => $import_id,
+		'staging_rows' => $staging_rows,
+		'used_cache'   => $used_cache,
+		'row_count'    => $row_count,
 	);
 }
 
@@ -870,7 +881,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 				'update_post_term_cache' => false,
 				'meta_query'             => array(
 					array(
-						'key'     => '_my_custom_api_id',
+						'key'     => '_tporapdi_external_id',
 						'value'   => $external_id,
 						'compare' => '=',
 					),
@@ -935,7 +946,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 
 		tporapdi_assign_featured_image_from_item( $item, $insert_post_id, $import_id, $featured_image_source_path );
 
-		update_post_meta( $insert_post_id, '_my_custom_api_id', $external_id );
+		update_post_meta( $insert_post_id, '_tporapdi_external_id', $external_id );
 		update_post_meta( $insert_post_id, '_tporapdi_import_id', $import_id );
 		update_post_meta( $insert_post_id, '_last_synced_timestamp', $timestamp );
 		tporapdi_save_item_meta_with_manifest( $insert_post_id, $item, $import_id );
@@ -1386,7 +1397,7 @@ function tporapdi_get_existing_imported_post_ids_by_external_ids( array $externa
 		array(
 			$wpdb->postmeta,
 			$wpdb->postmeta,
-			'_my_custom_api_id',
+			'_tporapdi_external_id',
 		),
 		$external_ids,
 		array(
@@ -1621,14 +1632,24 @@ function tporapdi_has_unprocessed_staging_rows( $import_id ) {
 }
 
 /**
- * Schedules one import worker event.
+ * Schedules one import worker event for a specific import job.
  *
+ * Because the cron event carries the import_id as an argument, WP-Cron
+ * deduplicates per hook+args tuple — two different import jobs each get their
+ * own independent pending event under the same hook name.
+ *
+ * @param int      $import_id     Import job ID.
  * @param int|null $delay_seconds Delay before scheduling. If null, uses settings.
  * @param bool     $is_initial    Whether this is the first schedule for a run.
  *
  * @return bool
  */
-function tporapdi_schedule_import_batch_event( $delay_seconds = null, $is_initial = false ) {
+function tporapdi_schedule_import_batch_event( $import_id, $delay_seconds = null, $is_initial = false ) {
+	$import_id = absint( $import_id );
+	if ( $import_id <= 0 ) {
+		return false;
+	}
+
 	$options = wp_parse_args( get_option( 'tporapdi_settings', array() ), tporapdi_get_default_settings() );
 
 	if ( null === $delay_seconds ) {
@@ -1639,24 +1660,45 @@ function tporapdi_schedule_import_batch_event( $delay_seconds = null, $is_initia
 
 	$delay_seconds = max( 0, (int) $delay_seconds );
 
-	if ( wp_next_scheduled( 'tporapdi_process_import_queue' ) ) {
+	if ( wp_next_scheduled( 'tporapdi_process_import_queue', array( $import_id ) ) ) {
 		return true;
 	}
 
-	return (bool) wp_schedule_single_event( time() + $delay_seconds, 'tporapdi_process_import_queue' );
+	return (bool) wp_schedule_single_event( time() + $delay_seconds, 'tporapdi_process_import_queue', array( $import_id ) );
 }
 
 /**
- * Returns the active import run state.
+ * Returns active run state.
  *
- * @return array<string, mixed>
+ * When an import_id is provided, returns that single job's state array.
+ * When omitted or 0, returns all active states keyed by import_id for
+ * backwards compatibility with older global-call sites.
+ *
+ * @param int $import_id Import job ID.
+ *
+ * @return array<string, mixed>|array<int, array<string, mixed>>
  */
-function tporapdi_get_active_run_state() {
-	return tporapdi_get_import_runner()->get_active_run_state();
+function tporapdi_get_active_run_state( $import_id = 0 ) {
+	$import_id = absint( $import_id );
+
+	if ( $import_id <= 0 ) {
+		return tporapdi_get_import_runner()->get_all_active_run_states();
+	}
+
+	return tporapdi_get_import_runner()->get_active_run_state( $import_id );
 }
 
 /**
- * Saves the active import run state.
+ * Returns active run states for all currently running import jobs.
+ *
+ * @return array<int, array<string, mixed>> Keyed by import_id.
+ */
+function tporapdi_get_all_active_run_states() {
+	return tporapdi_get_import_runner()->get_all_active_run_states();
+}
+
+/**
+ * Saves the active run state for the import job identified by the state's import_id key.
  *
  * @param array<string, mixed> $state Run state.
  *
@@ -1667,13 +1709,14 @@ function tporapdi_set_active_run_state( $state ) {
 }
 
 /**
- * Clears the active import run state.
- * , 10
+ * Clears the active run state for a specific import job.
+ *
+ * @param int $import_id Import job ID.
  *
  * @return void
  */
-function tporapdi_clear_active_run_state() {
-	tporapdi_get_import_runner()->clear_active_run_state();
+function tporapdi_clear_active_run_state( $import_id ) {
+	tporapdi_get_import_runner()->clear_active_run_state( absint( $import_id ) );
 }
 
 /**
@@ -1697,12 +1740,16 @@ function tporapdi_process_unprocessed_staging_rows( $started_at_microtime, $impo
 }
 
 /**
- * Handles one scheduled import batch event.
+ * Handles one scheduled import batch event for a specific import job.
+ *
+ * Invoked by WP-Cron with the import_id as the single hook argument.
+ *
+ * @param int $import_id Import job ID.
  *
  * @return void
  */
-function tporapdi_handle_scheduled_import_batch() {
-	tporapdi_get_import_runner()->handle_scheduled_import_batch();
+function tporapdi_handle_scheduled_import_batch( $import_id ) {
+	tporapdi_get_import_runner()->handle_scheduled_import_batch( absint( $import_id ) );
 }
 
 /**
@@ -1756,17 +1803,25 @@ function tporapdi_array_is_list( $input_array ) {
 /**
  * Finds and trashes orphaned imported items whose sync timestamp is stale.
  *
- * @param int $run_started_unix Unix timestamp when the run started.
- * @param int $import_id        Import job ID.
+ * @param int    $run_started_unix Unix timestamp when the run started.
+ * @param int    $import_id        Import job ID.
+ * @param string $target_post_type Post type the import targets. Defaults to 'post'.
  *
  * @return int|WP_Error
  */
-function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id ) {
+function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id, $target_post_type = 'post' ) {
 	global $wpdb;
 
-	$posts_table    = $wpdb->posts;
-	$postmeta_table = $wpdb->postmeta;
-	$import_id      = absint( $import_id );
+	$posts_table      = $wpdb->posts;
+	$postmeta_table   = $wpdb->postmeta;
+	$import_id        = absint( $import_id );
+	$target_post_type = sanitize_key( (string) $target_post_type );
+
+	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
+		$target_post_type = 'post';
+	}
+
+	$orphan_limit = max( 1, (int) apply_filters( 'tporapdi_orphan_trash_limit', 500 ) );
 
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$orphan_ids = $wpdb->get_col(
@@ -1785,15 +1840,17 @@ function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id )
 				AND (
 					pm.meta_value IS NULL
 					OR CAST(pm.meta_value AS UNSIGNED) < %d
-				)",
+				)
+			LIMIT %d",
 			$posts_table,
 			$postmeta_table,
 			'_last_synced_timestamp',
 			$postmeta_table,
 			'_tporapdi_import_id',
 			$import_id,
-			'tporapdi_item',
-			$run_started_unix
+			$target_post_type,
+			$run_started_unix,
+			$orphan_limit
 		)
 	);
 
@@ -1802,8 +1859,14 @@ function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id )
 	}
 
 	$trashed_count = 0;
+	$loop_started  = microtime( true );
+	$loop_budget   = (float) apply_filters( 'tporapdi_orphan_trash_time_budget', 25.0 );
 
 	foreach ( $orphan_ids as $post_id ) {
+		if ( $loop_budget > 0.0 && ( microtime( true ) - $loop_started ) >= $loop_budget ) {
+			break;
+		}
+
 		$trashed = wp_trash_post( (int) $post_id );
 
 		if ( false !== $trashed && null !== $trashed ) {

@@ -364,12 +364,14 @@ class TPORAPDI_Import_Runner {
 	}
 
 	/**
-	 * Handles one scheduled batch slice for the active import run.
+	 * Handles one scheduled batch slice for the given import's active run.
+	 *
+	 * @param int $import_id Import job ID.
 	 *
 	 * @return void
 	 */
-	public function handle_scheduled_import_batch(): void {
-		$state = $this->get_active_run_state();
+	public function handle_scheduled_import_batch( int $import_id ): void {
+		$state = $this->get_active_run_state( $import_id );
 
 		if ( empty( $state ) || empty( $state['import_id'] ) ) {
 			return;
@@ -394,15 +396,16 @@ class TPORAPDI_Import_Runner {
 
 		if ( is_wp_error( $processing_result ) ) {
 			$this->write_failed_processing_log( $import_id, $state, $processing_result );
-			$this->clear_active_run_state();
+			$this->clear_active_run_state( $import_id );
 			return;
 		}
 
 		$state = $this->merge_processing_result( $state, $processing_result );
 
 		if ( ! empty( $processing_result['has_remaining'] ) ) {
+			$state['last_heartbeat'] = time();
 			$this->set_active_run_state( $state );
-			tporapdi_schedule_import_batch_event( null, false );
+			tporapdi_schedule_import_batch_event( $import_id, null, false );
 			return;
 		}
 
@@ -410,12 +413,14 @@ class TPORAPDI_Import_Runner {
 	}
 
 	/**
-	 * Returns the active import run state.
+	 * Returns the active run state for one import job.
+	 *
+	 * @param int $import_id Import job ID.
 	 *
 	 * @return array<string, mixed>
 	 */
-	public function get_active_run_state(): array {
-		$state = get_option( 'tporapdi_active_import_run', array() );
+	public function get_active_run_state( int $import_id ): array {
+		$state = get_option( 'tporapdi_active_run_' . absint( $import_id ), array() );
 
 		if ( ! is_array( $state ) ) {
 			$state = array();
@@ -425,23 +430,66 @@ class TPORAPDI_Import_Runner {
 	}
 
 	/**
-	 * Saves the active import run state.
+	 * Returns active run states for all imports currently running.
 	 *
-	 * @param array<string, mixed> $state Run state.
+	 * Performs a single LIKE query against wp_options rather than requiring
+	 * callers to know every running import_id up front.
+	 *
+	 * @return array<int, array<string, mixed>> Keyed by import_id.
+	 */
+	public function get_all_active_run_states(): array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
+				$wpdb->esc_like( 'tporapdi_active_run_' ) . '%'
+			),
+			ARRAY_A
+		);
+
+		$states = array();
+
+		if ( ! is_array( $rows ) ) {
+			return $states;
+		}
+
+		foreach ( $rows as $row ) {
+			$state = maybe_unserialize( $row['option_value'] );
+			if ( is_array( $state ) && ! empty( $state['import_id'] ) ) {
+				$states[ (int) $state['import_id'] ] = $state;
+			}
+		}
+
+		return $states;
+	}
+
+	/**
+	 * Saves the active run state for one import job.
+	 *
+	 * The import_id is read from the state array itself.
+	 *
+	 * @param array<string, mixed> $state Run state (must contain import_id).
 	 *
 	 * @return void
 	 */
 	public function set_active_run_state( array $state ): void {
-		update_option( 'tporapdi_active_import_run', $state, false );
+		$import_id = absint( $state['import_id'] ?? 0 );
+		if ( $import_id > 0 ) {
+			update_option( 'tporapdi_active_run_' . $import_id, $state, false );
+		}
 	}
 
 	/**
-	 * Clears the active import run state.
+	 * Clears the active run state for one import job.
+	 *
+	 * @param int $import_id Import job ID.
 	 *
 	 * @return void
 	 */
-	public function clear_active_run_state(): void {
-		delete_option( 'tporapdi_active_import_run' );
+	public function clear_active_run_state( int $import_id ): void {
+		delete_option( 'tporapdi_active_run_' . absint( $import_id ) );
 	}
 
 	/**
@@ -478,7 +526,7 @@ class TPORAPDI_Import_Runner {
 		}
 
 		if ( 'resume' === $startup_policy['action'] ) {
-			$this->handle_scheduled_import_batch();
+			$this->handle_scheduled_import_batch( $import_id );
 			return;
 		}
 
@@ -498,18 +546,30 @@ class TPORAPDI_Import_Runner {
 	 * @return string One of start|resume|blocked.
 	 */
 	private function evaluate_startup_gate( int $import_id, bool $allow_same_import_resume = false ): string {
-		$active_state = $this->get_active_run_state();
+		// Each import job owns its own lock option — only check this job's state.
+		$active_state = $this->get_active_run_state( $import_id );
 
 		if ( empty( $active_state['run_id'] ) ) {
 			return 'start';
 		}
 
-		$active_import_id = isset( $active_state['import_id'] ) ? absint( $active_state['import_id'] ) : 0;
+		// If the last heartbeat is older than 10 minutes the run is dead (fatal error, cron
+		// killed, server restart, etc.) and will never self-recover. Clear the stale lock so
+		// a fresh run can start.
+		$last_heartbeat = isset( $active_state['last_heartbeat'] )
+			? (int) $active_state['last_heartbeat']
+			: (int) ( $active_state['start_timestamp'] ?? 0 );
 
-		if ( $allow_same_import_resume && $active_import_id === $import_id ) {
+		if ( $last_heartbeat > 0 && ( time() - $last_heartbeat ) > ( 10 * MINUTE_IN_SECONDS ) ) {
+			$this->clear_active_run_state( $import_id );
+			return 'start';
+		}
+
+		if ( $allow_same_import_resume ) {
 			return 'resume';
 		}
 
+		// This import is already running and the caller does not allow resume (manual trigger).
 		return 'blocked';
 	}
 
@@ -623,6 +683,7 @@ class TPORAPDI_Import_Runner {
 			'trigger_source'      => $trigger_source,
 			'start_timestamp'     => $started_unix,
 			'start_time'          => gmdate( 'Y-m-d H:i:s', $started_unix ),
+			'last_heartbeat'      => $started_unix,
 			'rows_processed'      => 0,
 			'rows_created'        => 0,
 			'rows_updated'        => 0,
@@ -654,7 +715,11 @@ class TPORAPDI_Import_Runner {
 		}
 
 		$this->set_active_run_state( $this->create_run_state( $import_id, $trigger_source ) );
-		$this->handle_scheduled_import_batch();
+		// Dispatch the first processing slice via the cron queue rather than running
+		// it inline. Inline execution means the extract caller (HTTP request or cron
+		// trigger hook) bears the processing cost and can orphan the lock if PHP is
+		// killed before the heartbeat is written.
+		tporapdi_schedule_import_batch_event( $import_id, null, true );
 
 		return true;
 	}
@@ -758,7 +823,12 @@ class TPORAPDI_Import_Runner {
 	 * @return void
 	 */
 	private function finalize_run( int $import_id, array $state ): void {
-		$orphans_trashed = tporapdi_trash_orphaned_imported_posts( (int) $state['start_timestamp'], $import_id );
+		$import_job       = Tporapdi_Job_Repository::find( $import_id );
+		$target_post_type = is_array( $import_job ) && ! empty( $import_job['target_post_type'] )
+			? sanitize_key( (string) $import_job['target_post_type'] )
+			: 'post';
+
+		$orphans_trashed = tporapdi_trash_orphaned_imported_posts( (int) $state['start_timestamp'], $import_id, $target_post_type );
 
 		if ( is_wp_error( $orphans_trashed ) ) {
 			$existing_errors   = isset( $state['errors'] ) && is_array( $state['errors'] ) ? $state['errors'] : array();
@@ -799,6 +869,6 @@ class TPORAPDI_Import_Runner {
 			(string) $state['start_time']
 		);
 
-		$this->clear_active_run_state();
+		$this->clear_active_run_state( $import_id );
 	}
 }

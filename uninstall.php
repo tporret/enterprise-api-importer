@@ -31,6 +31,13 @@ $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $network_table ) );
 
 delete_option( 'tporapdi_db_schema_version' );
 delete_option( 'tporapdi_active_import_run' );
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+$wpdb->query(
+	$wpdb->prepare(
+		"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+		$wpdb->esc_like( 'tporapdi_active_run_' ) . '%'
+	)
+);
 delete_option( 'tporapdi_settings' );
 delete_site_option( 'tporapdi_network_db_schema_version' );
 

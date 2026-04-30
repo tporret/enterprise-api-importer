@@ -92,8 +92,8 @@ function tporapdi_add_admin_pages() {
 
 	add_submenu_page(
 		TPORAPDI_ADMIN_PAGE_MANAGE_SLUG,
-		__( 'Schedules', 'tporret-api-data-importer' ),
-		__( 'Schedules', 'tporret-api-data-importer' ),
+		__( 'Import Schedules', 'tporret-api-data-importer' ),
+		__( 'Import Schedules', 'tporret-api-data-importer' ),
 		tporapdi_get_manage_imports_capability(),
 		TPORAPDI_ADMIN_PAGE_SCHEDULES_SLUG,
 		'tporapdi_render_schedules_page'
@@ -469,7 +469,7 @@ function tporapdi_render_imports_list_page() {
 		admin_url( 'admin.php' )
 	);
 
-	$active_state = tporapdi_get_active_run_state();
+	$all_active_states = tporapdi_get_all_active_run_states();
 	?>
 	<div class="wrap eapi-manage-shell">
 
@@ -493,14 +493,15 @@ function tporapdi_render_imports_list_page() {
 			<div class="eapi-manage-kpi">
 				<div class="eapi-manage-kpi-label"><?php esc_html_e( 'Queue State', 'tporret-api-data-importer' ); ?></div>
 				<div class="eapi-manage-kpi-value">
-					<?php if ( ! empty( $active_state['run_id'] ) ) : ?>
+					<?php if ( ! empty( $all_active_states ) ) : ?>
 						<span class="eapi-manage-running">
 							<?php
+							$running_count = count( $all_active_states );
 							echo esc_html(
 								sprintf(
-									/* translators: %d is the active import job ID. */
-									__( 'Running #%d', 'tporret-api-data-importer' ),
-									isset( $active_state['import_id'] ) ? (int) $active_state['import_id'] : 0
+									/* translators: %d is the number of currently running import jobs. */
+									_n( '%d Running', '%d Running', $running_count, 'tporret-api-data-importer' ),
+									$running_count
 								)
 							);
 							?>
@@ -657,8 +658,8 @@ function tporapdi_get_dashboard_metrics() {
 	$latest_logs   = tporapdi_db_get_latest_logs_indexed_by_import_id();
 	$pending_index = tporapdi_db_get_pending_counts_by_import_id();
 
-	$metrics      = array();
-	$active_state = tporapdi_get_active_run_state();
+	$metrics           = array();
+	$all_active_states = tporapdi_get_all_active_run_states();
 
 	foreach ( $rows as $row ) {
 		$import_id = isset( $row['id'] ) ? absint( $row['id'] ) : 0;
@@ -709,8 +710,8 @@ function tporapdi_get_dashboard_metrics() {
 			}
 		}
 
-		if ( 'unknown' === $trigger_source && ! empty( $active_state['import_id'] ) && (int) $active_state['import_id'] === $import_id && ! empty( $active_state['trigger_source'] ) ) {
-			$trigger_source = sanitize_key( (string) $active_state['trigger_source'] );
+		if ( 'unknown' === $trigger_source && isset( $all_active_states[ $import_id ] ) && ! empty( $all_active_states[ $import_id ]['trigger_source'] ) ) {
+			$trigger_source = sanitize_key( (string) $all_active_states[ $import_id ]['trigger_source'] );
 		}
 
 		if ( '' === $details_summary ) {
@@ -959,72 +960,85 @@ function tporapdi_render_schedules_page() {
 	$sorting = tporapdi_get_dashboard_sorting_args();
 	$metrics = tporapdi_sort_dashboard_metrics( $metrics, $sorting['orderby'], $sorting['order'] );
 	?>
-<div class="wrap">
-<h1><?php esc_html_e( 'Schedules & Health Dashboard', 'tporret-api-data-importer' ); ?></h1>
-	<?php tporapdi_render_admin_notices(); ?>
+	<div class="wrap eapi-manage-shell">
 
-<table class="widefat striped eapi-admin-table eai-schedules-table">
-<thead>
-<tr>
-<th><?php tporapdi_render_dashboard_sortable_header( __( 'Import Name & ID', 'tporret-api-data-importer' ), 'name', $sorting['orderby'], $sorting['order'] ); ?></th>
-<th class="column-status"><?php tporapdi_render_dashboard_sortable_header( __( 'Status', 'tporret-api-data-importer' ), 'status', $sorting['orderby'], $sorting['order'] ); ?></th>
-<th><?php tporapdi_render_dashboard_sortable_header( __( 'Trigger Source', 'tporret-api-data-importer' ), 'trigger_source', $sorting['orderby'], $sorting['order'] ); ?></th>
-<th><?php tporapdi_render_dashboard_sortable_header( __( 'Last Run Time', 'tporret-api-data-importer' ), 'last_run_at', $sorting['orderby'], $sorting['order'] ); ?></th>
-<th><?php esc_html_e( 'Last Run Metrics', 'tporret-api-data-importer' ); ?></th>
-<th><?php esc_html_e( 'Details', 'tporret-api-data-importer' ); ?></th>
-<th><?php tporapdi_render_dashboard_sortable_header( __( 'Next Scheduled Run', 'tporret-api-data-importer' ), 'next_scheduled', $sorting['orderby'], $sorting['order'] ); ?></th>
-<th class="column-actions"><?php esc_html_e( 'Actions', 'tporret-api-data-importer' ); ?></th>
-</tr>
-</thead>
-<tbody>
-	<?php if ( empty( $metrics ) ) : ?>
-<tr><td colspan="8"><?php esc_html_e( 'No import jobs found.', 'tporret-api-data-importer' ); ?></td></tr>
-<?php else : ?>
-	<?php foreach ( $metrics as $metric ) : ?>
-		<?php $badge = tporapdi_get_status_badge_data( isset( $metric['status'] ) ? (string) $metric['status'] : 'idle' ); ?>
-<tr>
-<td>
-<strong><?php echo esc_html( isset( $metric['name'] ) ? (string) $metric['name'] : '' ); ?></strong><br />
-<span>
-		<?php
-		/* translators: %d is the import job ID. */
-		echo esc_html( sprintf( __( 'ID: %d', 'tporret-api-data-importer' ), isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) );
-		?>
-</span>
-</td>
-<td class="column-status"><span class="<?php echo esc_attr( $badge['class'] ); ?>"><?php echo esc_html( $badge['label'] ); ?></span></td>
-<td><?php echo esc_html( tporapdi_get_trigger_source_label( isset( $metric['trigger_source'] ) ? (string) $metric['trigger_source'] : 'unknown' ) ); ?></td>
-<td><?php echo esc_html( ! empty( $metric['last_run_at'] ) ? (string) $metric['last_run_at'] : __( 'Never', 'tporret-api-data-importer' ) ); ?></td>
-<td>
-		<?php
-		echo esc_html(
-			sprintf(
-			/* translators: 1: rows created, 2: rows updated, 3: rows trashed, 4: error count. */
-				__( 'Created: %1$d | Updated: %2$d | Trashed: %3$d | Errors: %4$d', 'tporret-api-data-importer' ),
-				isset( $metric['rows_created'] ) ? (int) $metric['rows_created'] : 0,
-				isset( $metric['rows_updated'] ) ? (int) $metric['rows_updated'] : 0,
-				isset( $metric['rows_trashed'] ) ? (int) $metric['rows_trashed'] : 0,
-				isset( $metric['error_count'] ) ? (int) $metric['error_count'] : 0
-			)
-		);
-		?>
-</td>
-<td><?php echo esc_html( isset( $metric['details_summary'] ) ? substr( (string) $metric['details_summary'], 0, 280 ) : '' ); ?></td>
-<td><?php echo esc_html( isset( $metric['next_scheduled'] ) ? (string) $metric['next_scheduled'] : __( 'Not scheduled', 'tporret-api-data-importer' ) ); ?></td>
-<td class="column-actions">
-<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-<input type="hidden" name="action" value="tporapdi_schedule_run_now" />
-<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) ( isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) ); ?>" />
-		<?php wp_nonce_field( 'tporapdi_schedule_run_now_' . (int) $metric['id'], 'tporapdi_schedule_run_now_nonce' ); ?>
-		<?php submit_button( __( 'Run Now', 'tporret-api-data-importer' ), 'secondary', 'submit', false ); ?>
-</form>
-</td>
-</tr>
-<?php endforeach; ?>
-<?php endif; ?>
-</tbody>
-</table>
-</div>
+		<div class="eapi-manage-topbar">
+			<h1 class="wp-heading-inline"><?php esc_html_e( 'Import Schedules', 'tporret-api-data-importer' ); ?></h1>
+		</div>
+
+		<hr class="wp-header-end" />
+		<?php tporapdi_render_admin_notices(); ?>
+
+		<div class="eapi-manage-card">
+			<div class="eapi-manage-card-header">
+				<h2 class="eapi-manage-card-title"><?php esc_html_e( 'Schedule Overview', 'tporret-api-data-importer' ); ?></h2>
+			</div>
+			<div class="eapi-manage-card-body">
+				<table class="widefat eapi-admin-table eapi-schedules-table">
+					<thead>
+						<tr>
+							<th><?php tporapdi_render_dashboard_sortable_header( __( 'Import Name & ID', 'tporret-api-data-importer' ), 'name', $sorting['orderby'], $sorting['order'] ); ?></th>
+							<th class="column-status"><?php tporapdi_render_dashboard_sortable_header( __( 'Status', 'tporret-api-data-importer' ), 'status', $sorting['orderby'], $sorting['order'] ); ?></th>
+							<th><?php tporapdi_render_dashboard_sortable_header( __( 'Trigger Source', 'tporret-api-data-importer' ), 'trigger_source', $sorting['orderby'], $sorting['order'] ); ?></th>
+							<th><?php tporapdi_render_dashboard_sortable_header( __( 'Last Run Time', 'tporret-api-data-importer' ), 'last_run_at', $sorting['orderby'], $sorting['order'] ); ?></th>
+							<th><?php esc_html_e( 'Last Run Metrics', 'tporret-api-data-importer' ); ?></th>
+							<th><?php esc_html_e( 'Details', 'tporret-api-data-importer' ); ?></th>
+							<th><?php tporapdi_render_dashboard_sortable_header( __( 'Next Scheduled Run', 'tporret-api-data-importer' ), 'next_scheduled', $sorting['orderby'], $sorting['order'] ); ?></th>
+							<th class="column-actions"><?php esc_html_e( 'Actions', 'tporret-api-data-importer' ); ?></th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php if ( empty( $metrics ) ) : ?>
+							<tr><td colspan="8"><?php esc_html_e( 'No import jobs found.', 'tporret-api-data-importer' ); ?></td></tr>
+						<?php else : ?>
+							<?php foreach ( $metrics as $metric ) : ?>
+								<?php $badge = tporapdi_get_status_badge_data( isset( $metric['status'] ) ? (string) $metric['status'] : 'idle' ); ?>
+								<tr>
+									<td>
+										<strong><?php echo esc_html( isset( $metric['name'] ) ? (string) $metric['name'] : '' ); ?></strong><br />
+										<span>
+											<?php
+											/* translators: %d is the import job ID. */
+											echo esc_html( sprintf( __( 'ID: %d', 'tporret-api-data-importer' ), isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) );
+											?>
+										</span>
+									</td>
+									<td class="column-status"><span class="<?php echo esc_attr( $badge['class'] ); ?>"><?php echo esc_html( $badge['label'] ); ?></span></td>
+									<td><?php echo esc_html( tporapdi_get_trigger_source_label( isset( $metric['trigger_source'] ) ? (string) $metric['trigger_source'] : 'unknown' ) ); ?></td>
+									<td><?php echo esc_html( ! empty( $metric['last_run_at'] ) ? (string) $metric['last_run_at'] : __( 'Never', 'tporret-api-data-importer' ) ); ?></td>
+									<td>
+										<?php
+										echo esc_html(
+											sprintf(
+												/* translators: 1: rows created, 2: rows updated, 3: rows trashed, 4: error count. */
+												__( 'Created: %1$d | Updated: %2$d | Trashed: %3$d | Errors: %4$d', 'tporret-api-data-importer' ),
+												isset( $metric['rows_created'] ) ? (int) $metric['rows_created'] : 0,
+												isset( $metric['rows_updated'] ) ? (int) $metric['rows_updated'] : 0,
+												isset( $metric['rows_trashed'] ) ? (int) $metric['rows_trashed'] : 0,
+												isset( $metric['error_count'] ) ? (int) $metric['error_count'] : 0
+											)
+										);
+										?>
+									</td>
+									<td><?php echo esc_html( isset( $metric['details_summary'] ) ? substr( (string) $metric['details_summary'], 0, 280 ) : '' ); ?></td>
+									<td><?php echo esc_html( isset( $metric['next_scheduled'] ) ? (string) $metric['next_scheduled'] : __( 'Not scheduled', 'tporret-api-data-importer' ) ); ?></td>
+									<td class="column-actions">
+										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+											<input type="hidden" name="action" value="tporapdi_schedule_run_now" />
+											<input type="hidden" name="import_id" value="<?php echo esc_attr( (string) ( isset( $metric['id'] ) ? (int) $metric['id'] : 0 ) ); ?>" />
+											<?php wp_nonce_field( 'tporapdi_schedule_run_now_' . (int) $metric['id'], 'tporapdi_schedule_run_now_nonce' ); ?>
+											<?php submit_button( __( 'Run Now', 'tporret-api-data-importer' ), 'secondary', 'submit', false ); ?>
+										</form>
+									</td>
+								</tr>
+							<?php endforeach; ?>
+						<?php endif; ?>
+					</tbody>
+				</table>
+			</div>
+		</div>
+
+	</div>
 	<?php
 }
 
@@ -1710,7 +1724,7 @@ function tporapdi_handle_schedule_run_now_action() {
 	// Execute immediately so updates/deletes happen even when WP-Cron is delayed.
 	tporapdi_handle_import_batch_hook( $import_id, 'run_now' );
 
-	$active_state = tporapdi_get_active_run_state();
+	$active_state = tporapdi_get_active_run_state( $import_id );
 	$scheduled    = empty( $active_state['run_id'] ) || ( isset( $active_state['import_id'] ) && (int) $active_state['import_id'] === $import_id );
 
 	wp_safe_redirect(

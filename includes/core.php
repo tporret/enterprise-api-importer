@@ -408,6 +408,8 @@ function tporapdi_maybe_upgrade_schema() {
 	tporapdi_ensure_imports_post_status_columns();
 	tporapdi_ensure_imports_custom_meta_mappings_column();
 	tporapdi_ensure_imports_template_columns();
+	tporapdi_migrate_external_id_meta_key();
+	tporapdi_migrate_remove_global_lock_option();
 
 	$installed_version = (string) get_option( 'tporapdi_db_schema_version', '' );
 
@@ -416,6 +418,49 @@ function tporapdi_maybe_upgrade_schema() {
 	}
 
 	tporapdi_activate_plugin();
+}
+
+/**
+ * One-time migration: renames the legacy _my_custom_api_id postmeta key to the
+ * namespaced _tporapdi_external_id key across all existing imported posts.
+ *
+ * Tracked by the tporapdi_migrated_external_id_meta_key option so the UPDATE
+ * runs only once even if tporapdi_maybe_upgrade_schema() is called repeatedly.
+ *
+ * @return void
+ */
+function tporapdi_migrate_external_id_meta_key(): void {
+	global $wpdb;
+
+	if ( get_option( 'tporapdi_migrated_external_id_meta_key' ) ) {
+		return;
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	$wpdb->update(
+		$wpdb->postmeta,
+		array( 'meta_key' => '_tporapdi_external_id' ),
+		array( 'meta_key' => '_my_custom_api_id' ),
+		array( '%s' ),
+		array( '%s' )
+	);
+
+	update_option( 'tporapdi_migrated_external_id_meta_key', true, false );
+}
+
+/**
+ * One-time migration: removes the legacy global lock option tporapdi_active_import_run
+ * that was replaced by per-job tporapdi_active_run_{import_id} options in v1.4.0.
+ *
+ * @return void
+ */
+function tporapdi_migrate_remove_global_lock_option(): void {
+	if ( get_option( 'tporapdi_migrated_per_job_lock' ) ) {
+		return;
+	}
+
+	delete_option( 'tporapdi_active_import_run' );
+	update_option( 'tporapdi_migrated_per_job_lock', true, false );
 }
 
 /**

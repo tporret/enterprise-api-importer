@@ -38,6 +38,7 @@ class TPORAPDI_Imports_List_Table extends WP_List_Table {
 	public function get_columns() {
 		return array(
 			'id'       => __( 'ID', 'tporret-api-data-importer' ),
+			'name'     => __( 'Name', 'tporret-api-data-importer' ),
 			'status'   => __( 'Status', 'tporret-api-data-importer' ),
 			'health'   => __( 'Endpoint', 'tporret-api-data-importer' ),
 			'trend'    => __( 'Trend (Blue = Created, Teal = Updated)', 'tporret-api-data-importer' ),

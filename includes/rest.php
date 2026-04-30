@@ -788,12 +788,12 @@ function tporapdi_rest_cleanup_import_job( WP_REST_Request $request ) {
 		);
 	}
 
-	$active_state = tporapdi_get_active_run_state();
+	$active_state = tporapdi_get_active_run_state( $id );
 	if ( ! empty( $active_state['run_id'] ) ) {
 		return new WP_REST_Response(
 			array(
 				'code'    => 'import_running',
-				'message' => esc_html__( 'An import is already running.', 'tporret-api-data-importer' ),
+				'message' => esc_html__( 'This import is currently running.', 'tporret-api-data-importer' ),
 			),
 			409
 		);
