@@ -1,11 +1,15 @@
 {
 	"name": "tporret-api-data-importer",
-	"version": "1.2.6",
+	"version": "1.3.0",
 	"private": true,
 	"description": "Frontend assets for tporret API Data Importer dashboard.",
 	"scripts": {
 		"build": "wp-scripts build",
-		"start": "wp-scripts start"
+		"check:metadata": "node scripts/check-release-metadata.mjs",
+		"check:php": "find . \\( -path './vendor' -o -path './node_modules' -o -path './.dist' -o -path './.svn-release' \\) -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l",
+		"release:check": "npm run check:metadata && npm run check:php && npm run build",
+		"start": "wp-scripts start",
+		"test": "npm run check:metadata"
 	},
 	"devDependencies": {
 		"@wordpress/scripts": "^30.0.0",

@@ -273,6 +273,14 @@ jobs:
             npm install
           fi
 
+          if node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts['check:metadata'] ? 0 : 1);"; then
+            ${PM} run check:metadata
+          fi
+
+          if node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts['check:php'] ? 0 : 1);"; then
+            ${PM} run check:php
+          fi
+
           # Resolve build command.
           BUILD_SCRIPT=""
           if [ -f .github/plugin-config ]; then

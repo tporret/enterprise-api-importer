@@ -42,13 +42,12 @@ It gives you:
 - Endpoint test, API data preview, and Twig dry-run tools before production execution.
 - Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
 
-## Latest Release (1.2.6)
+## Latest Release (1.3.0)
 
-- Added post-type-aware defaults plumbing in the import workspace and REST layer.
-- Added excerpt and slug templates to the Mapping & Templating workflow.
-- Existing imported posts now sync mapping-driven destination attributes during updates, including status, author, discussion settings, excerpt, and slug.
-- Added a dedicated Cleanup tab for existing jobs with typed confirmation, plus per-job trash/delete fresh-start actions.
-- Twig now renders missing variables as empty by default instead of failing the row import.
+- Deepened the import architecture into focused modules for validation, lifecycle execution, template rendering, security checks, repositories, media ingestion, cleanup, and edit-lock policy.
+- Added reporter auto-discovery so dashboard metrics self-register without touching central wiring.
+- Centralized post-type default normalization for REST saves and import runtime.
+- Preserved the existing REST API, admin UI, and import job compatibility while reducing duplicated control flow.
 
 ## Multisite Operation
 
@@ -575,7 +574,7 @@ Built-in Twig extensions:
 
 ## Requirements
 
-- WordPress 6.x
+- WordPress 6.3 through 7.0.0
 - PHP 8.1+
 - Composer dependency: `twig/twig`
 
@@ -597,21 +596,27 @@ composer require twig/twig
 - `tporret-api-data-importer.php` bootstrap
 - `includes/core.php` activation and schema migrations
 - `includes/content.php` CPT registration
-- `includes/import.php` ETL engine, queue, cron orchestration, media helper
+- `includes/import.php` backwards-compatible ETL, queue, and cron orchestration functions
+- `includes/modules/` focused import, validation, security, repository, media, cleanup, and lock-policy modules
+- `includes/reporting/` dashboard REST endpoints, aggregator, and reporter modules
 - `includes/admin.php` admin UI and admin-post handlers
-- `includes/db.php` database access and log writes
-- `includes/class-eapi-imports-list-table.php` admin list rendering
+- `includes/db.php` database compatibility layer and helper functions
+- `includes/class-tporapdi-imports-list-table.php` admin list rendering
+- `src/` React admin asset source for dashboard and import-job workspace
+- `build/` generated WordPress admin assets
 
 ## Developer Quick Checks
 
 ```bash
-php -l tporret-api-data-importer.php
-php -l includes/core.php
-php -l includes/content.php
-php -l includes/db.php
-php -l includes/import.php
-php -l includes/admin.php
-php -l includes/class-eapi-imports-list-table.php
+npm run check:metadata
+npm run check:php
+npm run build
+```
+
+Before tagging a release, run the full local gate:
+
+```bash
+npm run release:check
 ```
 
 ## License

@@ -9,7 +9,7 @@
  * Donate link: https://porretto.com/donate
  * Requires at least: 6.3
  * Requires PHP: 8.1
- * Tested up to: 6.9
+ * Tested up to: 7.0.0
  * Text Domain: tporret-api-data-importer
  *
  * @package EnterpriseAPIImporter
