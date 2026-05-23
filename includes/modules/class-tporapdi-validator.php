@@ -107,6 +107,8 @@ class TPORAPDI_Validator {
 
 		$filter_rules_json         = $this->sanitize_filter_rules( $params['filter_rules'] ?? null );
 		$custom_meta_mappings_json = $this->sanitize_custom_meta_mappings( $params['custom_meta_mappings'] ?? null );
+		$parent_mapping_json       = $this->sanitize_parent_mapping( $params['parent_mapping'] ?? null, $target_post_type );
+		$media_mappings_json       = $this->sanitize_media_mappings( $params['media_mappings'] ?? null );
 
 		$auth_token    = tporapdi_encrypt_credential( $auth_token );
 		$auth_password = tporapdi_encrypt_credential( $auth_password );
@@ -136,9 +138,11 @@ class TPORAPDI_Validator {
 			'comment_status'             => $comment_status,
 			'ping_status'                => $ping_status,
 			'custom_meta_mappings'       => $custom_meta_mappings_json,
+			'parent_mapping'             => $parent_mapping_json,
+			'media_mappings'             => $media_mappings_json,
 		);
 
-		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s' );
+		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
 
 		return array(
 			'data'    => $data,
@@ -416,6 +420,159 @@ class TPORAPDI_Validator {
 		}
 
 		return $custom_meta_mappings_json;
+	}
+
+	/**
+	 * Sanitizes parent mapping configuration from request payload.
+	 *
+	 * @param mixed  $raw_mapping      Raw parent mapping payload.
+	 * @param string $target_post_type Target post type slug.
+	 *
+	 * @return string
+	 */
+	private function sanitize_parent_mapping( $raw_mapping, string $target_post_type ): string {
+		$parent_mapping_json = '{}';
+
+		if ( null === $raw_mapping ) {
+			return $parent_mapping_json;
+		}
+
+		$post_type_object = get_post_type_object( $target_post_type );
+		if ( ! $post_type_object || ! $post_type_object->hierarchical ) {
+			return $parent_mapping_json;
+		}
+
+		$decoded_mapping = is_string( $raw_mapping ) ? json_decode( $raw_mapping, true ) : $raw_mapping;
+		if ( ! is_array( $decoded_mapping ) ) {
+			return $parent_mapping_json;
+		}
+
+		$enabled = ! empty( $decoded_mapping['enabled'] );
+		if ( ! $enabled ) {
+			return $parent_mapping_json;
+		}
+
+		$source_path = $this->sanitize_mapping_path( $decoded_mapping['source_path'] ?? '' );
+		if ( '' === $source_path ) {
+			return $parent_mapping_json;
+		}
+
+		$lookup          = sanitize_key( (string) ( $decoded_mapping['lookup'] ?? 'external_id' ) );
+		$allowed_lookups = array( 'external_id', 'wp_id', 'slug' );
+		if ( ! in_array( $lookup, $allowed_lookups, true ) ) {
+			$lookup = 'external_id';
+		}
+
+		$missing         = sanitize_key( (string) ( $decoded_mapping['missing'] ?? 'defer' ) );
+		$allowed_missing = array( 'defer', 'root', 'skip' );
+		if ( ! in_array( $missing, $allowed_missing, true ) ) {
+			$missing = 'defer';
+		}
+
+		$encoded_mapping = wp_json_encode(
+			array(
+				'enabled'     => true,
+				'source_path' => $source_path,
+				'lookup'      => $lookup,
+				'missing'     => $missing,
+			),
+			JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+		);
+
+		if ( false !== $encoded_mapping ) {
+			$parent_mapping_json = $encoded_mapping;
+		}
+
+		return $parent_mapping_json;
+	}
+
+	/**
+	 * Sanitizes media mapping configuration from request payload.
+	 *
+	 * @param mixed $raw_mappings Raw media mappings payload.
+	 *
+	 * @return string
+	 */
+	private function sanitize_media_mappings( $raw_mappings ): string {
+		$media_mappings_json = '[]';
+
+		if ( null === $raw_mappings ) {
+			return $media_mappings_json;
+		}
+
+		$decoded_mappings = is_string( $raw_mappings ) ? json_decode( $raw_mappings, true ) : $raw_mappings;
+		if ( ! is_array( $decoded_mappings ) ) {
+			return $media_mappings_json;
+		}
+
+		if ( isset( $decoded_mappings['role'] ) ) {
+			$decoded_mappings = array( $decoded_mappings );
+		}
+
+		$allowed_roles      = array( 'featured', 'gallery', 'meta' );
+		$sanitized_mappings = array();
+
+		foreach ( $decoded_mappings as $mapping ) {
+			if ( ! is_array( $mapping ) ) {
+				continue;
+			}
+
+			$role = sanitize_key( (string) ( $mapping['role'] ?? '' ) );
+			if ( ! in_array( $role, $allowed_roles, true ) ) {
+				continue;
+			}
+
+			$source_path = $this->sanitize_mapping_path( $mapping['source_path'] ?? '' );
+			if ( '' === $source_path ) {
+				continue;
+			}
+
+			$sanitized_mapping = array(
+				'role'        => $role,
+				'source_path' => $source_path,
+			);
+
+			foreach ( array( 'url_path', 'alt_path', 'title_path', 'caption_path', 'description_path' ) as $path_key ) {
+				$path = $this->sanitize_mapping_path( $mapping[ $path_key ] ?? '' );
+				if ( '' !== $path ) {
+					$sanitized_mapping[ $path_key ] = $path;
+				}
+			}
+
+			$meta_key = isset( $mapping['meta_key'] ) ? sanitize_key( (string) $mapping['meta_key'] ) : '';
+			if ( '' !== $meta_key ) {
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- This is a JSON config key, not a database query argument.
+				$sanitized_mapping['meta_key'] = $meta_key;
+			}
+
+			if ( 'meta' === $role && '' === $meta_key ) {
+				continue;
+			}
+
+			$sanitized_mappings[] = $sanitized_mapping;
+		}
+
+		$encoded_mappings = wp_json_encode( $sanitized_mappings, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+		if ( false !== $encoded_mappings ) {
+			$media_mappings_json = $encoded_mappings;
+		}
+
+		return $media_mappings_json;
+	}
+
+	/**
+	 * Sanitizes one dot-notation mapping path.
+	 *
+	 * @param mixed $path Raw mapping path value.
+	 *
+	 * @return string
+	 */
+	private function sanitize_mapping_path( $path ): string {
+		$path = sanitize_text_field( trim( (string) $path ) );
+		$path = preg_replace( '/[^A-Za-z0-9_.-]/', '', $path );
+		$path = is_string( $path ) ? trim( $path, '.' ) : '';
+
+		return mb_substr( $path, 0, 191 );
 	}
 
 	/**

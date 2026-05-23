@@ -197,6 +197,27 @@
 	margin: 0 0 12px !important;
 }
 
+.eapi-ij-mapping-panel {
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+}
+
+.eapi-ij-mapping-grid {
+	margin-top: 12px;
+}
+
+.eapi-ij-media-mapping-row {
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+	padding: 12px;
+	margin-top: 12px;
+	background: #fff;
+}
+
+.eapi-ij-media-metadata-grid {
+	margin-top: 12px;
+}
+
 .eapi-ij-template-editor {
 	display: flex;
 	border: 1px solid #8c8f94;

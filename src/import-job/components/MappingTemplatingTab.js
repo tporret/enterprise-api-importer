@@ -47,6 +47,114 @@ export default function MappingTemplatingTab( {
 		updateField( 'custom_meta_mappings', JSON.stringify( mappings ) );
 	}, [ updateField ] );
 
+	const parentMapping = useMemo( () => {
+		try {
+			const parsed = typeof job.parent_mapping === 'string'
+				? JSON.parse( job.parent_mapping )
+				: job.parent_mapping;
+
+			return parsed && 'object' === typeof parsed && ! Array.isArray( parsed )
+				? {
+					enabled: !! parsed.enabled,
+					source_path: parsed.source_path || '',
+					lookup: parsed.lookup || 'external_id',
+					missing: parsed.missing || 'defer',
+				}
+				: {
+					enabled: false,
+					source_path: '',
+					lookup: 'external_id',
+					missing: 'defer',
+				};
+		} catch {
+			return {
+				enabled: false,
+				source_path: '',
+				lookup: 'external_id',
+				missing: 'defer',
+			};
+		}
+	}, [ job.parent_mapping ] );
+
+	const setParentMapping = useCallback( ( mapping ) => {
+		if ( ! mapping.enabled ) {
+			updateField( 'parent_mapping', '{}' );
+			return;
+		}
+
+		updateField( 'parent_mapping', JSON.stringify( {
+			enabled: true,
+			source_path: mapping.source_path || '',
+			lookup: mapping.lookup || 'external_id',
+			missing: mapping.missing || 'defer',
+		} ) );
+	}, [ updateField ] );
+
+	const updateParentMapping = useCallback( ( field, value ) => {
+		setParentMapping( { ...parentMapping, [ field ]: value } );
+	}, [ parentMapping, setParentMapping ] );
+
+	const mediaMappings = useMemo( () => {
+		try {
+			const parsed = typeof job.media_mappings === 'string'
+				? JSON.parse( job.media_mappings )
+				: job.media_mappings;
+
+			return Array.isArray( parsed ) ? parsed.map( ( mapping ) => ( {
+				role: mapping.role || 'featured',
+				source_path: mapping.source_path || '',
+				url_path: mapping.url_path || '',
+				alt_path: mapping.alt_path || '',
+				title_path: mapping.title_path || '',
+				caption_path: mapping.caption_path || '',
+				description_path: mapping.description_path || '',
+				meta_key: mapping.meta_key || '',
+			} ) ) : [];
+		} catch {
+			return [];
+		}
+	}, [ job.media_mappings ] );
+
+	const setMediaMappings = useCallback( ( mappings ) => {
+		updateField( 'media_mappings', JSON.stringify( mappings.map( ( mapping ) => ( {
+			role: mapping.role || 'featured',
+			source_path: mapping.source_path || '',
+			url_path: mapping.url_path || '',
+			alt_path: mapping.alt_path || '',
+			title_path: mapping.title_path || '',
+			caption_path: mapping.caption_path || '',
+			description_path: mapping.description_path || '',
+			meta_key: mapping.meta_key || '',
+		} ) ) ) );
+	}, [ updateField ] );
+
+	const handleAddMediaMapping = useCallback( () => {
+		setMediaMappings( [
+			...mediaMappings,
+			{
+				role: 'featured',
+				source_path: '',
+				url_path: '',
+				alt_path: '',
+				title_path: '',
+				caption_path: '',
+				description_path: '',
+				meta_key: '',
+			},
+		] );
+	}, [ mediaMappings, setMediaMappings ] );
+
+	const handleRemoveMediaMapping = useCallback( ( index ) => {
+		setMediaMappings( mediaMappings.filter( ( _, i ) => i !== index ) );
+	}, [ mediaMappings, setMediaMappings ] );
+
+	const handleUpdateMediaMapping = useCallback( ( index, field, value ) => {
+		const updated = mediaMappings.map( ( mapping, i ) =>
+			i === index ? { ...mapping, [ field ]: value } : mapping
+		);
+		setMediaMappings( updated );
+	}, [ mediaMappings, setMediaMappings ] );
+
 	const handleAddMapping = useCallback( () => {
 		setCustomMetaMappings( [ ...customMetaMappings, { key: '', value: '' } ] );
 	}, [ customMetaMappings, setCustomMetaMappings ] );
@@ -152,6 +260,12 @@ export default function MappingTemplatingTab( {
 			updateField( 'ping_status', 'closed', { markTouched: false } );
 		}
 	}, [ supportsTrackbacks, job.ping_status, updateField ] );
+
+	useEffect( () => {
+		if ( hasRecommendedDefaults && ! supportsHierarchy && parentMapping.enabled ) {
+			updateField( 'parent_mapping', '{}', { markTouched: false } );
+		}
+	}, [ hasRecommendedDefaults, supportsHierarchy, parentMapping.enabled, updateField ] );
 
 	return (
 		<div className="eapi-ij-tab-content">
@@ -293,6 +407,71 @@ export default function MappingTemplatingTab( {
 				</FlexBlock>
 			</Flex>
 
+			<Panel className="eapi-ij-mapping-panel">
+				<PanelBody
+					title={ __( 'Parent Mapping', 'tporret-api-data-importer' ) }
+					initialOpen={ parentMapping.enabled }
+				>
+					<Notice status={ supportsHierarchy ? 'info' : 'warning' } isDismissible={ false } className="eapi-ij-inline-notice">
+						{ supportsHierarchy
+							? __( 'Map a source field to a parent post by imported external ID, WordPress ID, or slug.', 'tporret-api-data-importer' )
+							: __( 'Parent mapping is available only for hierarchical post types.', 'tporret-api-data-importer' ) }
+					</Notice>
+
+					<CheckboxControl
+						__nextHasNoMarginBottom
+						label={ __( 'Enable parent mapping', 'tporret-api-data-importer' ) }
+						checked={ supportsHierarchy && !! parentMapping.enabled }
+						disabled={ ! supportsHierarchy }
+						onChange={ ( val ) => setParentMapping( { ...parentMapping, enabled: !! val } ) }
+					/>
+
+					{ supportsHierarchy && parentMapping.enabled && (
+						<Flex className="eapi-ij-mapping-grid" gap={ 3 } wrap>
+							<FlexBlock>
+								<TextControl
+									__next40pxDefaultSize
+									__nextHasNoMarginBottom
+									label={ __( 'Parent Source Path', 'tporret-api-data-importer' ) }
+									placeholder="parent.id"
+									value={ parentMapping.source_path }
+									onChange={ ( val ) => updateParentMapping( 'source_path', val ) }
+									help={ __( 'Dot-notation path to the parent identifier in each API record.', 'tporret-api-data-importer' ) }
+								/>
+							</FlexBlock>
+							<FlexBlock>
+								<SelectControl
+									__next40pxDefaultSize
+									__nextHasNoMarginBottom
+									label={ __( 'Lookup By', 'tporret-api-data-importer' ) }
+									value={ parentMapping.lookup }
+									options={ [
+										{ label: __( 'Imported External ID', 'tporret-api-data-importer' ), value: 'external_id' },
+										{ label: __( 'WordPress Post ID', 'tporret-api-data-importer' ), value: 'wp_id' },
+										{ label: __( 'Post Slug', 'tporret-api-data-importer' ), value: 'slug' },
+									] }
+									onChange={ ( val ) => updateParentMapping( 'lookup', val ) }
+								/>
+							</FlexBlock>
+							<FlexBlock>
+								<SelectControl
+									__next40pxDefaultSize
+									__nextHasNoMarginBottom
+									label={ __( 'When Parent Is Missing', 'tporret-api-data-importer' ) }
+									value={ parentMapping.missing }
+									options={ [
+										{ label: __( 'Defer and Reconcile Later', 'tporret-api-data-importer' ), value: 'defer' },
+										{ label: __( 'Import As Root Item', 'tporret-api-data-importer' ), value: 'root' },
+										{ label: __( 'Skip Item', 'tporret-api-data-importer' ), value: 'skip' },
+									] }
+									onChange={ ( val ) => updateParentMapping( 'missing', val ) }
+								/>
+							</FlexBlock>
+						</Flex>
+					) }
+				</PanelBody>
+			</Panel>
+
 			<Flex className="eapi-ij-split" align="stretch">
 				<FlexBlock className="eapi-ij-split-editor">
 					<TextControl
@@ -399,6 +578,130 @@ export default function MappingTemplatingTab( {
 					</Panel>
 				</FlexItem>
 			</Flex>
+
+			<Panel className="eapi-ij-mapping-panel">
+				<PanelBody
+					title={ __( 'Media Mappings', 'tporret-api-data-importer' ) }
+					initialOpen={ mediaMappings.length > 0 }
+				>
+					<Notice status="info" isDismissible={ false } className="eapi-ij-inline-notice">
+						{ __( 'Configured media mappings take precedence over the legacy featured image source path above.', 'tporret-api-data-importer' ) }
+					</Notice>
+
+					{ mediaMappings.map( ( mapping, index ) => (
+						<div key={ index } className="eapi-ij-media-mapping-row">
+							<Flex gap={ 3 } align="flex-end" wrap>
+								<FlexBlock>
+									<SelectControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Role', 'tporret-api-data-importer' ) }
+										value={ mapping.role }
+										options={ [
+											{ label: __( 'Featured Image', 'tporret-api-data-importer' ), value: 'featured' },
+											{ label: __( 'Gallery Meta', 'tporret-api-data-importer' ), value: 'gallery' },
+											{ label: __( 'Attachment ID Meta', 'tporret-api-data-importer' ), value: 'meta' },
+										] }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'role', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Source Path', 'tporret-api-data-importer' ) }
+										placeholder="images"
+										value={ mapping.source_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'source_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'URL Path', 'tporret-api-data-importer' ) }
+										placeholder="url"
+										value={ mapping.url_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'url_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexItem>
+									<Button
+										isDestructive
+										icon="trash"
+										label={ __( 'Remove media mapping', 'tporret-api-data-importer' ) }
+										onClick={ () => handleRemoveMediaMapping( index ) }
+									/>
+								</FlexItem>
+							</Flex>
+
+							<Flex className="eapi-ij-media-metadata-grid" gap={ 3 } wrap>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Alt Path', 'tporret-api-data-importer' ) }
+										placeholder="alt"
+										value={ mapping.alt_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'alt_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Title Path', 'tporret-api-data-importer' ) }
+										placeholder="title"
+										value={ mapping.title_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'title_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Caption Path', 'tporret-api-data-importer' ) }
+										placeholder="caption"
+										value={ mapping.caption_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'caption_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Description Path', 'tporret-api-data-importer' ) }
+										placeholder="description"
+										value={ mapping.description_path }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'description_path', val ) }
+									/>
+								</FlexBlock>
+								<FlexBlock>
+									<TextControl
+										__next40pxDefaultSize
+										__nextHasNoMarginBottom
+										label={ __( 'Meta Key', 'tporret-api-data-importer' ) }
+										placeholder={ 'gallery' === mapping.role ? '_gallery_attachment_ids' : '_source_attachment_id' }
+										value={ mapping.meta_key }
+										onChange={ ( val ) => handleUpdateMediaMapping( index, 'meta_key', val ) }
+										help={ 'meta' === mapping.role
+										? __( 'Required for attachment ID meta mappings.', 'tporret-api-data-importer' )
+										: __( 'Optional for gallery mappings; ignored for featured images.', 'tporret-api-data-importer' ) }
+									/>
+								</FlexBlock>
+							</Flex>
+						</div>
+					) ) }
+
+					<Button
+						variant="secondary"
+						onClick={ handleAddMediaMapping }
+						style={ { marginTop: '8px' } }
+					>
+						{ __( '+ Add Media Mapping', 'tporret-api-data-importer' ) }
+					</Button>
+				</PanelBody>
+			</Panel>
 
 			<Panel className="eapi-ij-custom-meta-panel">
 				<PanelBody

@@ -737,10 +737,12 @@ function tporapdi_resolve_json_array_path( $decoded_json, $path ) {
  * @param array<string, int>   $existing_post_ids         Map of external IDs to existing post IDs.
  * @param string               $excerpt_template          Optional excerpt template for this import job.
  * @param string               $post_name_template        Optional slug template for this import job.
+ * @param array                $parent_mapping            Parent resolution mapping config.
+ * @param array                $media_mappings            Media mapping config.
  *
  * @return array<string, mixed>|WP_Error
  */
-function tporapdi_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0, $featured_image_source_path = 'image.url', $post_author = 0, $post_status = 'draft', $comment_status = 'closed', $ping_status = 'closed', $custom_meta_mappings = array(), $existing_post_ids = array(), $excerpt_template = '', $post_name_template = '' ) {
+function tporapdi_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0, $featured_image_source_path = 'image.url', $post_author = 0, $post_status = 'draft', $comment_status = 'closed', $ping_status = 'closed', $custom_meta_mappings = array(), $existing_post_ids = array(), $excerpt_template = '', $post_name_template = '', $parent_mapping = array(), $media_mappings = array() ) {
 	if ( ! is_array( $item ) ) {
 		return new WP_Error( 'tporapdi_invalid_item', __( 'Transform input must be an array.', 'tporret-api-data-importer' ) );
 	}
@@ -899,7 +901,12 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		}
 	}
 
-	$timestamp = time();
+	$timestamp         = time();
+	$parent_resolution = tporapdi_resolve_parent_mapping_for_item( $item, $parent_mapping, $target_post_type, $import_id, $external_id, $existing_post_id );
+
+	if ( is_wp_error( $parent_resolution ) ) {
+		return $parent_resolution;
+	}
 
 	if ( $existing_post_id > 0 ) {
 		$post_content = Tporapdi_Media_Ingestor::parse_and_sideload_content_images( $post_content, $existing_post_id );
@@ -920,6 +927,9 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		}
 		if ( $post_author > 0 ) {
 			$insert_args['post_author'] = $post_author;
+		}
+		if ( ! empty( $parent_resolution['enabled'] ) && isset( $parent_resolution['post_parent'] ) && (int) $parent_resolution['post_parent'] > 0 ) {
+			$insert_args['post_parent'] = (int) $parent_resolution['post_parent'];
 		}
 
 		$insert_post_id = wp_insert_post( $insert_args, true );
@@ -944,11 +954,16 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 			}
 		}
 
-		tporapdi_assign_featured_image_from_item( $item, $insert_post_id, $import_id, $featured_image_source_path );
+		if ( ! empty( $media_mappings ) && is_array( $media_mappings ) ) {
+			Tporapdi_Media_Ingestor::apply_media_mappings( $item, $insert_post_id, $import_id, $media_mappings );
+		} else {
+			tporapdi_assign_featured_image_from_item( $item, $insert_post_id, $import_id, $featured_image_source_path );
+		}
 
 		update_post_meta( $insert_post_id, '_tporapdi_external_id', $external_id );
 		update_post_meta( $insert_post_id, '_tporapdi_import_id', $import_id );
 		update_post_meta( $insert_post_id, '_last_synced_timestamp', $timestamp );
+		tporapdi_store_parent_mapping_state( $insert_post_id, $parent_resolution );
 		tporapdi_save_item_meta_with_manifest( $insert_post_id, $item, $import_id );
 		tporapdi_apply_custom_meta_mappings( $insert_post_id, $item, $custom_meta_mappings );
 
@@ -964,7 +979,9 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		return new WP_Error( 'tporapdi_existing_post_not_found', __( 'Existing imported item post could not be loaded.', 'tporret-api-data-importer' ) );
 	}
 
-	$featured_image_updated = tporapdi_assign_featured_image_from_item( $item, $existing_post_id, $import_id, $featured_image_source_path );
+	$featured_image_updated = ! empty( $media_mappings ) && is_array( $media_mappings )
+		? Tporapdi_Media_Ingestor::apply_media_mappings( $item, $existing_post_id, $import_id, $media_mappings )
+		: tporapdi_assign_featured_image_from_item( $item, $existing_post_id, $import_id, $featured_image_source_path );
 
 	$update_args = array(
 		'ID' => $existing_post_id,
@@ -1002,6 +1019,10 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		$update_args['post_author'] = $post_author;
 	}
 
+	if ( ! empty( $parent_resolution['enabled'] ) && isset( $parent_resolution['post_parent'] ) && (int) $existing_post->post_parent !== (int) $parent_resolution['post_parent'] ) {
+		$update_args['post_parent'] = (int) $parent_resolution['post_parent'];
+	}
+
 	if ( count( $update_args ) > 1 ) {
 		$updated_post_id = wp_update_post( $update_args, true );
 
@@ -1010,6 +1031,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		}
 
 		update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+		tporapdi_store_parent_mapping_state( $existing_post_id, $parent_resolution );
 		tporapdi_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 		tporapdi_apply_custom_meta_mappings( $existing_post_id, $item, $custom_meta_mappings );
 
@@ -1021,6 +1043,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 
 	// Touch sync timestamp even when content and title are unchanged so valid items are not treated as orphans.
 	update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+	tporapdi_store_parent_mapping_state( $existing_post_id, $parent_resolution );
 	tporapdi_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 	tporapdi_apply_custom_meta_mappings( $existing_post_id, $item, $custom_meta_mappings );
 
@@ -1425,6 +1448,302 @@ function tporapdi_get_existing_imported_post_ids_by_external_ids( array $externa
 }
 
 /**
+ * Resolves parent mapping for a single import item.
+ *
+ * @param array<string, mixed> $item             Item payload.
+ * @param array                $parent_mapping   Parent mapping config.
+ * @param string               $target_post_type Target post type.
+ * @param int                  $import_id        Import job ID.
+ * @param string               $external_id      Current item external ID.
+ * @param int                  $current_post_id  Existing post ID, if any.
+ *
+ * @return array<string, mixed>|WP_Error Parent resolution state.
+ */
+function tporapdi_resolve_parent_mapping_for_item( array $item, $parent_mapping, string $target_post_type, int $import_id, string $external_id, int $current_post_id = 0 ) {
+	$empty_resolution = array(
+		'enabled'                    => false,
+		'post_parent'                => 0,
+		'parent_external_id'         => '',
+		'pending_parent_external_id' => '',
+	);
+
+	if ( empty( $parent_mapping ) || ! is_array( $parent_mapping ) || empty( $parent_mapping['enabled'] ) ) {
+		return $empty_resolution;
+	}
+
+	$post_type_object = get_post_type_object( $target_post_type );
+	if ( ! $post_type_object || ! $post_type_object->hierarchical ) {
+		return $empty_resolution;
+	}
+
+	$source_path = isset( $parent_mapping['source_path'] ) ? trim( (string) $parent_mapping['source_path'] ) : '';
+	if ( '' === $source_path ) {
+		return $empty_resolution;
+	}
+
+	$parent_value = tporapdi_get_item_value_by_path( $item, $source_path );
+	if ( null === $parent_value || '' === (string) $parent_value ) {
+		return $empty_resolution;
+	}
+
+	if ( ! is_scalar( $parent_value ) ) {
+		return $empty_resolution;
+	}
+
+	$parent_reference = trim( (string) $parent_value );
+	$lookup           = isset( $parent_mapping['lookup'] ) ? sanitize_key( (string) $parent_mapping['lookup'] ) : 'external_id';
+	$missing          = isset( $parent_mapping['missing'] ) ? sanitize_key( (string) $parent_mapping['missing'] ) : 'defer';
+	$parent_post_id   = 0;
+
+	if ( 'wp_id' === $lookup ) {
+		$parent_post_id = tporapdi_resolve_parent_post_id_by_wp_id( $parent_reference, $target_post_type, $current_post_id );
+	} elseif ( 'slug' === $lookup ) {
+		$parent_post_id = tporapdi_resolve_parent_post_id_by_slug( $parent_reference, $target_post_type, $current_post_id );
+	} else {
+		$lookup = 'external_id';
+
+		if ( $parent_reference === $external_id ) {
+			return $empty_resolution;
+		}
+
+		$parent_post_id = tporapdi_find_imported_parent_post_id( $parent_reference, $import_id, $target_post_type, $current_post_id );
+	}
+
+	if ( $parent_post_id > 0 ) {
+		return array(
+			'enabled'                    => true,
+			'post_parent'                => $parent_post_id,
+			'parent_external_id'         => 'external_id' === $lookup ? $parent_reference : '',
+			'pending_parent_external_id' => '',
+		);
+	}
+
+	if ( 'skip' === $missing ) {
+		return new WP_Error( 'tporapdi_missing_parent', __( 'Mapped parent could not be resolved for this item.', 'tporret-api-data-importer' ) );
+	}
+
+	return array(
+		'enabled'                    => true,
+		'post_parent'                => 0,
+		'parent_external_id'         => 'external_id' === $lookup ? $parent_reference : '',
+		'pending_parent_external_id' => ( 'defer' === $missing && 'external_id' === $lookup ) ? $parent_reference : '',
+	);
+}
+
+/**
+ * Stores parent mapping metadata for an imported post.
+ *
+ * @param int                  $post_id           Post ID.
+ * @param array<string, mixed> $parent_resolution Parent resolution state.
+ *
+ * @return void
+ */
+function tporapdi_store_parent_mapping_state( int $post_id, array $parent_resolution ): void {
+	$post_id = absint( $post_id );
+	if ( $post_id <= 0 || empty( $parent_resolution['enabled'] ) ) {
+		return;
+	}
+
+	$parent_external_id = isset( $parent_resolution['parent_external_id'] ) ? sanitize_text_field( (string) $parent_resolution['parent_external_id'] ) : '';
+	$pending_parent_id  = isset( $parent_resolution['pending_parent_external_id'] ) ? sanitize_text_field( (string) $parent_resolution['pending_parent_external_id'] ) : '';
+
+	if ( '' !== $parent_external_id ) {
+		update_post_meta( $post_id, '_tporapdi_parent_external_id', $parent_external_id );
+	} else {
+		delete_post_meta( $post_id, '_tporapdi_parent_external_id' );
+	}
+
+	if ( '' !== $pending_parent_id ) {
+		update_post_meta( $post_id, '_tporapdi_pending_parent_external_id', $pending_parent_id );
+	} else {
+		delete_post_meta( $post_id, '_tporapdi_pending_parent_external_id' );
+	}
+}
+
+/**
+ * Finds an imported parent post by external ID within one import job.
+ *
+ * @param string $parent_external_id Parent external ID.
+ * @param int    $import_id          Import job ID.
+ * @param string $target_post_type   Target post type.
+ * @param int    $exclude_post_id    Post ID that cannot be its own parent.
+ *
+ * @return int Parent post ID or 0.
+ */
+function tporapdi_find_imported_parent_post_id( string $parent_external_id, int $import_id, string $target_post_type, int $exclude_post_id = 0 ): int {
+	$parent_external_id = trim( $parent_external_id );
+	$import_id          = absint( $import_id );
+	$exclude_post_id    = absint( $exclude_post_id );
+
+	if ( '' === $parent_external_id || $import_id <= 0 ) {
+		return 0;
+	}
+
+	$parent_posts = get_posts(
+		array(
+			'post_type'              => $target_post_type,
+			'posts_per_page'         => 1,
+			'post_status'            => 'any',
+			'fields'                 => 'ids',
+			'ignore_sticky_posts'    => true,
+			'no_found_rows'          => true,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+			'post__not_in'           => $exclude_post_id > 0 ? array( $exclude_post_id ) : array(),
+			'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Import parent lookup is scoped to import-owned postmeta.
+				array(
+					'key'     => '_tporapdi_external_id',
+					'value'   => $parent_external_id,
+					'compare' => '=',
+				),
+				array(
+					'key'     => '_tporapdi_import_id',
+					'value'   => $import_id,
+					'compare' => '=',
+				),
+			),
+		)
+	);
+
+	return empty( $parent_posts ) ? 0 : absint( $parent_posts[0] );
+}
+
+/**
+ * Resolves a parent by WordPress post ID.
+ *
+ * @param string $parent_reference Parent reference value.
+ * @param string $target_post_type Target post type.
+ * @param int    $exclude_post_id  Post ID that cannot be its own parent.
+ *
+ * @return int Parent post ID or 0.
+ */
+function tporapdi_resolve_parent_post_id_by_wp_id( string $parent_reference, string $target_post_type, int $exclude_post_id = 0 ): int {
+	$parent_post_id  = absint( $parent_reference );
+	$exclude_post_id = absint( $exclude_post_id );
+
+	if ( $parent_post_id <= 0 || $parent_post_id === $exclude_post_id ) {
+		return 0;
+	}
+
+	$parent_post = get_post( $parent_post_id );
+	if ( ! $parent_post instanceof WP_Post || $target_post_type !== $parent_post->post_type ) {
+		return 0;
+	}
+
+	return $parent_post_id;
+}
+
+/**
+ * Resolves a parent by post slug.
+ *
+ * @param string $parent_reference Parent reference value.
+ * @param string $target_post_type Target post type.
+ * @param int    $exclude_post_id  Post ID that cannot be its own parent.
+ *
+ * @return int Parent post ID or 0.
+ */
+function tporapdi_resolve_parent_post_id_by_slug( string $parent_reference, string $target_post_type, int $exclude_post_id = 0 ): int {
+	$slug            = sanitize_title( $parent_reference );
+	$exclude_post_id = absint( $exclude_post_id );
+
+	if ( '' === $slug ) {
+		return 0;
+	}
+
+	$parent_posts = get_posts(
+		array(
+			'name'                   => $slug,
+			'post_type'              => $target_post_type,
+			'posts_per_page'         => 1,
+			'post_status'            => 'any',
+			'fields'                 => 'ids',
+			'ignore_sticky_posts'    => true,
+			'no_found_rows'          => true,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+			'post__not_in'           => $exclude_post_id > 0 ? array( $exclude_post_id ) : array(),
+		)
+	);
+
+	return empty( $parent_posts ) ? 0 : absint( $parent_posts[0] );
+}
+
+/**
+ * Reconciles posts whose external parent was imported later in the same job.
+ *
+ * @param int    $import_id        Import job ID.
+ * @param string $target_post_type Target post type.
+ *
+ * @return int Number of posts whose parent was resolved.
+ */
+function tporapdi_reconcile_pending_parent_mappings( int $import_id, string $target_post_type ): int {
+	global $wpdb;
+
+	$import_id = absint( $import_id );
+	if ( $import_id <= 0 ) {
+		return 0;
+	}
+
+	$query = $wpdb->prepare(
+		'SELECT pending.post_id, pending.meta_value AS parent_external_id
+		FROM %i pending
+		INNER JOIN %i job_meta ON pending.post_id = job_meta.post_id
+		INNER JOIN %i posts ON pending.post_id = posts.ID
+		WHERE pending.meta_key = %s
+			AND pending.meta_value <> %s
+			AND job_meta.meta_key = %s
+			AND job_meta.meta_value = %d
+			AND posts.post_type = %s',
+		$wpdb->postmeta,
+		$wpdb->postmeta,
+		$wpdb->posts,
+		'_tporapdi_pending_parent_external_id',
+		'',
+		'_tporapdi_import_id',
+		$import_id,
+		$target_post_type
+	);
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Query text is prepared above.
+	$pending_rows = $wpdb->get_results( $query, ARRAY_A );
+	if ( ! is_array( $pending_rows ) ) {
+		return 0;
+	}
+
+	$resolved_count = 0;
+	foreach ( $pending_rows as $pending_row ) {
+		$post_id            = isset( $pending_row['post_id'] ) ? absint( $pending_row['post_id'] ) : 0;
+		$parent_external_id = isset( $pending_row['parent_external_id'] ) ? sanitize_text_field( (string) $pending_row['parent_external_id'] ) : '';
+
+		if ( $post_id <= 0 || '' === $parent_external_id ) {
+			continue;
+		}
+
+		$parent_post_id = tporapdi_find_imported_parent_post_id( $parent_external_id, $import_id, $target_post_type, $post_id );
+		if ( $parent_post_id <= 0 ) {
+			continue;
+		}
+
+		$updated_post_id = wp_update_post(
+			array(
+				'ID'          => $post_id,
+				'post_parent' => $parent_post_id,
+			),
+			true
+		);
+
+		if ( is_wp_error( $updated_post_id ) ) {
+			continue;
+		}
+
+		delete_post_meta( $post_id, '_tporapdi_pending_parent_external_id' );
+		++$resolved_count;
+	}
+
+	return $resolved_count;
+}
+
+/**
  * Assigns a featured image from a configured item field path.
  *
  * Default path is image.url and can be overridden with
@@ -1502,13 +1821,13 @@ function tporapdi_assign_featured_image_from_item( $item, $post_id, $import_id =
  * @return string Sanitized template with Twig blocks intact.
  */
 function tporapdi_kses_mapping_template( $template, $allowed_html ) {
-	$template   = (string) $template;
+	$template    = (string) $template;
 	$twig_blocks = array();
 
 	$template = preg_replace_callback(
 		'/\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}/s',
 		static function ( $matches ) use ( &$twig_blocks ) {
-			$key               = 'TWIGEAIBLOCK' . count( $twig_blocks ) . 'X';
+			$key                 = 'TWIGEAIBLOCK' . count( $twig_blocks ) . 'X';
 			$twig_blocks[ $key ] = $matches[0];
 			return $key;
 		},

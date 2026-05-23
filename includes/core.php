@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'TPORAPDI_DB_SCHEMA_VERSION' ) ) {
-	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260410-1' );
+	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260523-1' );
 }
 
 if ( ! defined( 'TPORAPDI_NETWORK_DB_SCHEMA_VERSION' ) ) {
@@ -78,6 +78,8 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 		comment_status varchar(20) NOT NULL DEFAULT 'closed',
 		ping_status varchar(20) NOT NULL DEFAULT 'closed',
 		custom_meta_mappings longtext NULL,
+		parent_mapping longtext NULL,
+		media_mappings longtext NULL,
 		created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY  (id),
 		KEY name (name)
@@ -119,6 +121,7 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();
 	tporapdi_ensure_imports_custom_meta_mappings_column();
+	tporapdi_ensure_imports_mapping_config_columns();
 	tporapdi_ensure_imports_template_columns();
 
 	tporapdi_sync_template_management_capabilities();
@@ -353,6 +356,31 @@ function tporapdi_ensure_imports_custom_meta_mappings_column() {
 }
 
 /**
+ * Ensures parent and media mapping config columns exist on the imports table.
+ *
+ * @return void
+ */
+function tporapdi_ensure_imports_mapping_config_columns() {
+	global $wpdb;
+
+	$table = tporapdi_db_imports_table();
+
+	$columns = array(
+		'parent_mapping' => 'ALTER TABLE %i ADD COLUMN parent_mapping longtext NULL AFTER custom_meta_mappings',
+		'media_mappings' => 'ALTER TABLE %i ADD COLUMN media_mappings longtext NULL AFTER parent_mapping',
+	);
+
+	foreach ( $columns as $col_name => $query ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, $col_name ) );
+		if ( null === $exists ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- Query text is selected from a fixed whitelist of literal ALTER statements.
+			$wpdb->query( $wpdb->prepare( $query, $table ) );
+		}
+	}
+}
+
+/**
  * Ensures excerpt_template and post_name_template columns exist on the imports table.
  *
  * @return void
@@ -407,6 +435,7 @@ function tporapdi_maybe_upgrade_schema() {
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();
 	tporapdi_ensure_imports_custom_meta_mappings_column();
+	tporapdi_ensure_imports_mapping_config_columns();
 	tporapdi_ensure_imports_template_columns();
 	tporapdi_migrate_external_id_meta_key();
 	tporapdi_migrate_remove_global_lock_option();

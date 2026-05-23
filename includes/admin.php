@@ -1079,107 +1079,13 @@ function tporapdi_handle_save_import() {
 
 	$import_id       = isset( $_POST['import_id'] ) ? absint( wp_unslash( $_POST['import_id'] ) ) : 0;
 	$previous_import = $import_id > 0 ? tporapdi_db_get_import_config( $import_id ) : null;
+	$params          = tporapdi_get_import_job_params_from_admin_post();
+	$sanitized       = tporapdi_rest_sanitize_import_job_fields( $params );
 
-	$name = isset( $_POST['name'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['name'] ) ) : '';
-	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Sanitized with esc_url_raw() after unslashing.
-	$endpoint_url     = isset( $_POST['endpoint_url'] ) ? esc_url_raw( trim( (string) wp_unslash( $_POST['endpoint_url'] ) ) ) : '';
-	$auth_method      = isset( $_POST['auth_method'] ) ? sanitize_key( (string) wp_unslash( $_POST['auth_method'] ) ) : 'none';
-	$auth_header_name = isset( $_POST['auth_header_name'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['auth_header_name'] ) ) : '';
-	$auth_username    = isset( $_POST['auth_username'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['auth_username'] ) ) : '';
-	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords are unslashed verbatim, validated by auth mode, then encrypted before storage.
-	$auth_password = isset( $_POST['auth_password'] ) ? (string) wp_unslash( $_POST['auth_password'] ) : '';
-
-	// Resolve the token value from the correct form field per method.
-	$auth_token = '';
-	if ( 'bearer' === $auth_method ) {
-		$auth_token = isset( $_POST['auth_token'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['auth_token'] ) ) : '';
-	} elseif ( 'api_key_custom' === $auth_method ) {
-		$auth_token = isset( $_POST['auth_token_apikey'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['auth_token_apikey'] ) ) : '';
-	}
-	$array_path              = isset( $_POST['array_path'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['array_path'] ) ) : '';
-	$unique_id_path          = isset( $_POST['unique_id_path'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['unique_id_path'] ) ) : 'id';
-	$recurrence              = isset( $_POST['recurrence'] ) ? sanitize_key( (string) wp_unslash( $_POST['recurrence'] ) ) : 'off';
-	$custom_interval_minutes = isset( $_POST['custom_interval_minutes'] ) ? absint( wp_unslash( $_POST['custom_interval_minutes'] ) ) : 0;
-	$target_post_type        = isset( $_POST['target_post_type'] ) ? sanitize_key( (string) wp_unslash( $_POST['target_post_type'] ) ) : 'post';
-	$title_template          = isset( $_POST['title_template'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['title_template'] ) ) : '';
-	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Template content must remain raw until Twig validation and wp_kses filtering run.
-	$template_raw     = isset( $_POST['mapping_template'] ) ? (string) wp_unslash( $_POST['mapping_template'] ) : '';
-	$unique_id_path   = trim( (string) $unique_id_path );
-	$target_post_type = trim( (string) $target_post_type );
-	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
-		$target_post_type = 'post';
-	}
-	$title_template = trim( (string) $title_template );
-	$title_template = mb_substr( $title_template, 0, 255 );
-
-	$allowed_recurrence = array( 'off', 'hourly', 'twicedaily', 'daily', 'custom' );
-	if ( ! in_array( $recurrence, $allowed_recurrence, true ) ) {
-		$recurrence = 'off';
-	}
-
-	$allowed_auth_methods = array( 'none', 'bearer', 'api_key_custom', 'basic_auth' );
-	if ( ! in_array( $auth_method, $allowed_auth_methods, true ) ) {
-		$auth_method = 'none';
-	}
-
-	// Clear fields that don't apply to the selected method.
-	if ( 'api_key_custom' !== $auth_method ) {
-		$auth_header_name = '';
-	}
-	if ( 'bearer' !== $auth_method && 'api_key_custom' !== $auth_method ) {
-		$auth_token = '';
-	}
-	if ( 'basic_auth' !== $auth_method ) {
-		$auth_username = '';
-		$auth_password = '';
-	}
-
-	// Encrypt credential fields before storage.
-	$auth_token    = tporapdi_encrypt_credential( $auth_token );
-	$auth_password = tporapdi_encrypt_credential( $auth_password );
-
-	if ( 'custom' === $recurrence ) {
-		$custom_interval_minutes = $custom_interval_minutes > 0 ? $custom_interval_minutes : 30;
-	} else {
-		$custom_interval_minutes = 0;
-	}
-
-	if ( '' === $unique_id_path ) {
-		$unique_id_path = 'id';
-	}
-
-	$allowed_mapping_html = array(
-		'h1'      => array( 'class' => true ),
-		'h2'      => array( 'class' => true ),
-		'h3'      => array( 'class' => true ),
-		'h4'      => array( 'class' => true ),
-		'h5'      => array( 'class' => true ),
-		'h6'      => array( 'class' => true ),
-		'p'       => array( 'class' => true ),
-		'br'      => array(),
-		'strong'  => array( 'class' => true ),
-		'em'      => array( 'class' => true ),
-		'ul'      => array( 'class' => true ),
-		'ol'      => array( 'class' => true ),
-		'li'      => array( 'class' => true ),
-		'article' => array( 'class' => true ),
-		'header'  => array( 'class' => true ),
-		'section' => array( 'class' => true ),
-		'footer'  => array( 'class' => true ),
-		'div'     => array( 'class' => true ),
-		'span'    => array( 'class' => true ),
-		'a'       => array(
-			'href'   => true,
-			'title'  => true,
-			'target' => true,
-			'rel'    => true,
-			'class'  => true,
-		),
-	);
-	$mapping_template     = tporapdi_kses_mapping_template( (string) $template_raw, $allowed_mapping_html );
-
-	$title_template_validation = tporapdi_validate_twig_template_security( $title_template, 'title' );
-	if ( is_wp_error( $title_template_validation ) ) {
+	if ( $sanitized instanceof WP_REST_Response ) {
+		$error_data    = $sanitized->get_data();
+		$error_message = is_array( $error_data ) && isset( $error_data['message'] ) ? (string) $error_data['message'] : __( 'Import job validation failed.', 'tporret-api-data-importer' );
+		set_transient( 'tporapdi_last_import_save_error', $error_message, 5 * MINUTE_IN_SECONDS );
 		wp_safe_redirect(
 			add_query_arg(
 				array(
@@ -1194,99 +1100,8 @@ function tporapdi_handle_save_import() {
 		exit;
 	}
 
-	// For new imports, templates are optional. For existing imports, require mapping template.
-	$is_new_import            = 0 === $import_id;
-	$requires_templates       = ! $is_new_import;
-	$mapping_template_missing = '' === $mapping_template;
-
-	if ( $requires_templates || ( $is_new_import && $mapping_template_missing && $title_template_missing ) ) {
-		// Only validate if template is provided.
-		if ( '' !== $mapping_template ) {
-			$mapping_template_validation = tporapdi_validate_twig_template_security( $mapping_template, 'mapping' );
-			if ( is_wp_error( $mapping_template_validation ) ) {
-				wp_safe_redirect(
-					add_query_arg(
-						array(
-							'page'            => TPORAPDI_ADMIN_PAGE_MANAGE_SLUG,
-							'action'          => 'edit',
-							'id'              => $import_id,
-							'tporapdi_notice' => 'import_error',
-						),
-						admin_url( 'admin.php' )
-					)
-				);
-				exit;
-			}
-		}
-	}
-
-	$filter_operator_options = tporapdi_get_filter_operator_options();
-	$allowed_operators       = array_keys( $filter_operator_options );
-	$filter_rules            = array();
-
-	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Filter rule arrays are unslashed first, then each member is sanitized per field below.
-	$raw_filter_rules = isset( $_POST['filter_rules'] ) ? wp_unslash( $_POST['filter_rules'] ) : array();
-	if ( ! empty( $raw_filter_rules ) ) {
-		$rule_keys      = isset( $raw_filter_rules['key'] ) && is_array( $raw_filter_rules['key'] ) ? $raw_filter_rules['key'] : array();
-		$rule_operators = isset( $raw_filter_rules['operator'] ) && is_array( $raw_filter_rules['operator'] ) ? $raw_filter_rules['operator'] : array();
-		$rule_values    = isset( $raw_filter_rules['value'] ) && is_array( $raw_filter_rules['value'] ) ? $raw_filter_rules['value'] : array();
-
-		$rule_count = max( count( $rule_keys ), count( $rule_operators ), count( $rule_values ) );
-		for ( $index = 0; $index < $rule_count; $index++ ) {
-			$rule_key      = isset( $rule_keys[ $index ] ) ? sanitize_text_field( trim( (string) $rule_keys[ $index ] ) ) : '';
-			$rule_operator = isset( $rule_operators[ $index ] ) ? sanitize_key( (string) $rule_operators[ $index ] ) : '';
-			$rule_value    = isset( $rule_values[ $index ] ) ? sanitize_text_field( (string) $rule_values[ $index ] ) : '';
-
-			if ( '' === $rule_key || ! in_array( $rule_operator, $allowed_operators, true ) ) {
-				continue;
-			}
-
-			$filter_rules[] = array(
-				'key'      => $rule_key,
-				'operator' => $rule_operator,
-				'value'    => $rule_value,
-			);
-		}
-	}
-
-	$filter_rules_json = wp_json_encode( $filter_rules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-	if ( false === $filter_rules_json ) {
-		$filter_rules_json = '[]';
-	}
-
-	if ( '' === $name || '' === $endpoint_url || ( $import_id > 0 && '' === $mapping_template ) ) {
-		wp_safe_redirect(
-			add_query_arg(
-				array(
-					'page'            => TPORAPDI_ADMIN_PAGE_MANAGE_SLUG,
-					'action'          => 'edit',
-					'id'              => $import_id,
-					'tporapdi_notice' => 'import_error',
-				),
-				admin_url( 'admin.php' )
-			)
-		);
-		exit;
-	}
-
-	$data    = array(
-		'name'                    => $name,
-		'endpoint_url'            => $endpoint_url,
-		'auth_method'             => $auth_method,
-		'auth_token'              => $auth_token,
-		'auth_header_name'        => $auth_header_name,
-		'auth_username'           => $auth_username,
-		'auth_password'           => $auth_password,
-		'array_path'              => $array_path,
-		'unique_id_path'          => $unique_id_path,
-		'recurrence'              => $recurrence,
-		'custom_interval_minutes' => $custom_interval_minutes,
-		'filter_rules'            => (string) $filter_rules_json,
-		'target_post_type'        => $target_post_type,
-		'title_template'          => $title_template,
-		'mapping_template'        => $mapping_template,
-	);
-	$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' );
+	$data    = $sanitized['data'];
+	$formats = $sanitized['formats'];
 
 	// Preserve existing encrypted credentials when blank values are submitted for an existing import.
 	if ( $import_id > 0 ) {
@@ -1342,6 +1157,51 @@ function tporapdi_handle_save_import() {
 		)
 	);
 	exit;
+}
+
+/**
+ * Normalizes legacy admin-post import payloads into the REST import-job shape.
+ *
+ * @return array<string, mixed>
+ */
+function tporapdi_get_import_job_params_from_admin_post(): array {
+	// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Caller verifies the nonce; values are sanitized by TPORAPDI_Validator.
+	$params = isset( $_POST ) && is_array( $_POST ) ? wp_unslash( $_POST ) : array();
+	$params = is_array( $params ) ? $params : array();
+
+	if ( isset( $params['auth_method'] ) && 'api_key_custom' === sanitize_key( (string) $params['auth_method'] ) && isset( $params['auth_token_apikey'] ) ) {
+		$params['auth_token'] = $params['auth_token_apikey'];
+	}
+
+	if ( isset( $params['filter_rules'] ) && is_array( $params['filter_rules'] ) && isset( $params['filter_rules']['key'] ) ) {
+		$params['filter_rules'] = tporapdi_normalize_legacy_filter_rules_payload( $params['filter_rules'] );
+	}
+
+	return $params;
+}
+
+/**
+ * Converts old form-table filter arrays into the REST filter-rule list shape.
+ *
+ * @param array<string, mixed> $raw_filter_rules Raw legacy filter rules.
+ * @return array<int, array{key: string, operator: string, value: string}>
+ */
+function tporapdi_normalize_legacy_filter_rules_payload( array $raw_filter_rules ): array {
+	$rule_keys      = isset( $raw_filter_rules['key'] ) && is_array( $raw_filter_rules['key'] ) ? $raw_filter_rules['key'] : array();
+	$rule_operators = isset( $raw_filter_rules['operator'] ) && is_array( $raw_filter_rules['operator'] ) ? $raw_filter_rules['operator'] : array();
+	$rule_values    = isset( $raw_filter_rules['value'] ) && is_array( $raw_filter_rules['value'] ) ? $raw_filter_rules['value'] : array();
+	$rule_count     = max( count( $rule_keys ), count( $rule_operators ), count( $rule_values ) );
+	$filter_rules   = array();
+
+	for ( $index = 0; $index < $rule_count; $index++ ) {
+		$filter_rules[] = array(
+			'key'      => isset( $rule_keys[ $index ] ) ? (string) $rule_keys[ $index ] : '',
+			'operator' => isset( $rule_operators[ $index ] ) ? (string) $rule_operators[ $index ] : '',
+			'value'    => isset( $rule_values[ $index ] ) ? (string) $rule_values[ $index ] : '',
+		);
+	}
+
+	return $filter_rules;
 }
 
 /**

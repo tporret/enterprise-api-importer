@@ -60,6 +60,8 @@ class TPORAPDI_Import_Runner {
 	 */
 	public function get_processing_stage_config( array $import_job ): array {
 		$custom_meta_mappings = array();
+		$parent_mapping       = array();
+		$media_mappings       = array();
 
 		if ( ! empty( $import_job['custom_meta_mappings'] ) ) {
 			$decoded_meta_mappings = is_string( $import_job['custom_meta_mappings'] )
@@ -68,6 +70,26 @@ class TPORAPDI_Import_Runner {
 
 			if ( is_array( $decoded_meta_mappings ) ) {
 				$custom_meta_mappings = $decoded_meta_mappings;
+			}
+		}
+
+		if ( ! empty( $import_job['parent_mapping'] ) ) {
+			$decoded_parent_mapping = is_string( $import_job['parent_mapping'] )
+				? json_decode( $import_job['parent_mapping'], true )
+				: $import_job['parent_mapping'];
+
+			if ( is_array( $decoded_parent_mapping ) ) {
+				$parent_mapping = $decoded_parent_mapping;
+			}
+		}
+
+		if ( ! empty( $import_job['media_mappings'] ) ) {
+			$decoded_media_mappings = is_string( $import_job['media_mappings'] )
+				? json_decode( $import_job['media_mappings'], true )
+				: $import_job['media_mappings'];
+
+			if ( is_array( $decoded_media_mappings ) ) {
+				$media_mappings = $decoded_media_mappings;
 			}
 		}
 
@@ -94,6 +116,8 @@ class TPORAPDI_Import_Runner {
 			'comment_status'             => isset( $import_job['comment_status'] ) ? (string) $import_job['comment_status'] : 'closed',
 			'ping_status'                => isset( $import_job['ping_status'] ) ? (string) $import_job['ping_status'] : 'closed',
 			'custom_meta_mappings'       => $custom_meta_mappings,
+			'parent_mapping'             => $parent_mapping,
+			'media_mappings'             => $media_mappings,
 		);
 	}
 
@@ -123,7 +147,9 @@ class TPORAPDI_Import_Runner {
 			is_array( $processing_config['custom_meta_mappings'] ) ? $processing_config['custom_meta_mappings'] : array(),
 			$existing_post_ids,
 			(string) $processing_config['excerpt_template'],
-			(string) $processing_config['post_name_template']
+			(string) $processing_config['post_name_template'],
+			is_array( $processing_config['parent_mapping'] ) ? $processing_config['parent_mapping'] : array(),
+			is_array( $processing_config['media_mappings'] ) ? $processing_config['media_mappings'] : array()
 		);
 	}
 
@@ -178,6 +204,10 @@ class TPORAPDI_Import_Runner {
 			} elseif ( isset( $item_result['action'] ) && 'updated' === $item_result['action'] ) {
 				++$result['rows_updated'];
 			}
+		}
+
+		if ( ! $result['timed_out'] && ! empty( $processing_config['parent_mapping'] ) ) {
+			tporapdi_reconcile_pending_parent_mappings( $row_import_id, (string) $processing_config['target_post_type'] );
 		}
 
 		return $result;

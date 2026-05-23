@@ -45,6 +45,8 @@ const DEFAULT_JOB = {
 	comment_status: 'closed',
 	ping_status: 'closed',
 	custom_meta_mappings: '[]',
+	parent_mapping: '{}',
+	media_mappings: '[]',
 };
 
 export default function ImportJobWorkspace() {
