@@ -28,6 +28,8 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
 - Optional templates for new jobs (start with connection setup, add templates later)
 - Multiple API auth modes: none, bearer token, custom API-key header, and basic auth
 - Per-import Target Post Type selection (posts, pages, and public custom post types)
+- Parent Mapping for hierarchical post types using imported external IDs, WordPress IDs, or slugs
+- Media Mappings for featured images, gallery attachment IDs, and attachment-ID custom fields
 - Per-import Default Target Settings (post status, post author, comment status, pingback/trackback status)
 - Per-import editing lock toggle for imported posts (allow editing or enforce read-only)
 - Time-aware batch processing via WP-Cron to reduce timeout and memory-risk scenarios
@@ -38,7 +40,7 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
   - `Tporapdi_Template_Engine` — unified Twig rendering seam for all template fields and dry-run previews
   - `Tporapdi_Security_Guard` — centralised SSRF, CIDR, and Twig security checks shared across save and run paths
   - `Tporapdi_Job_Repository`, `Tporapdi_Queue_Repository`, `Tporapdi_Log_Repository` — domain repositories hiding all SQL and cache management
-  - `Tporapdi_Media_Ingestor` — isolated image sideload and HTML rewrite logic with idempotent deduplication
+  - `Tporapdi_Media_Ingestor` — isolated image sideload, HTML rewrite, featured image, gallery, and attachment-meta mapping logic with idempotent deduplication
   - `Tporapdi_Cleanup_Service` — chunked garbage collection for staging queue and log tables
   - Reporter self-registration via glob discovery — adding a new dashboard metric requires zero edits to existing files
   - `Tporapdi_Lock_Policy` — single edit-lock policy seam used by all admin UI affordances
@@ -70,6 +72,8 @@ Built for real-world production workflows:
 - Target post type safely falls back to post if invalid or unavailable
 - Attachment is excluded by default from target post type selection
 - Default target post settings are validated and applied at load time for consistent publishing/discussion behavior
+- Hierarchical post types can map parent relationships from API fields and reconcile out-of-order parent records
+- Media mappings can sideload featured, gallery, and meta attachments while preserving legacy featured image fallback behavior
 - Imports are staged and processed in queue batches for safer long-running jobs
 - Imported items are cryptographically linked to their origin import (read-only)
 - Template configuration changes are audit-logged with full actor context
@@ -114,7 +118,10 @@ Yes. Select any public post type from Target Post Type. If the selected post typ
 Each subsite keeps its own import jobs, schedules, settings, and dashboard. A separate Network Admin dashboard can summarize active subsites when the plugin is also active on the primary site. Activate the plugin per site; Network Activate is intentionally blocked.
 
 = Does this import media attachments automatically from URL fields? =
-The plugin includes a secure media sideload helper foundation with source URL deduplication. Full field-level media mapping workflows can be added on top of this helper.
+Yes. Configure Media Mappings in the Mapping/Templating tab to sideload featured images, gallery attachments, or attachment IDs stored in custom fields. The legacy Featured Image Source Path still works as a fallback when no media mappings are configured.
+
+= Can imported pages or hierarchical custom post types keep parent relationships? =
+Yes. For hierarchical target post types, enable Parent Mapping in the Mapping/Templating tab. Parent lookup can use an imported external ID, an existing WordPress post ID, or a post slug. Missing parents can be deferred for later reconciliation, imported as root items, or skipped.
 
 = Who can edit imported items and templates? =
 Template configuration requires the `tporapdi_manage_templates` capability or `manage_options` role. Multisite super admins always have access. Imported item editing can now be controlled per import job with the "Lock editing of imported posts" setting.
@@ -154,10 +161,13 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Extracted `Tporapdi_Security_Guard` module: centralises SSRF, CIDR, and Twig security validation — same rules enforced at save time and run time.
 * Extracted three domain repositories (`Tporapdi_Job_Repository`, `Tporapdi_Queue_Repository`, `Tporapdi_Log_Repository`): all SQL and cache management moved out of db.php, which is now a thin backwards-compatible shim layer.
 * Extracted `Tporapdi_Media_Ingestor` module: image sideload, deduplication, and HTML content rewriting isolated from lifecycle cleanup.
+* Added parent mapping for hierarchical post types, with lookup by imported external ID, WordPress post ID, or slug and configurable missing-parent behavior.
+* Added media mappings for featured images, gallery attachment IDs, and attachment-ID meta fields, including image metadata paths for alt text, title, caption, and description.
 * Extracted `Tporapdi_Cleanup_Service` module: chunked garbage collection for staging queue and log tables, independent of media handling.
 * Reporting Discovery Engine: reporters now self-register via `TPORAPDI_Reporting_Aggregator::register()`; `reporting.php` uses glob-based auto-discovery so new reporters require no edits to existing files.
 * Extracted `Tporapdi_Lock_Policy` module: single `is_locked(int $post_id)` seam for all import-managed post edit-locking; all content.php hook callbacks route through this one policy.
 * Deepened `TPORAPDI_Defaults_Resolver`: new `normalize(string $post_type, array $raw_input)` static method is the single seam for post status/comment status/ping status normalization — used identically by the REST save path and the import runtime.
+* Legacy admin-post import save submissions now delegate to the same import-job validator used by REST create/update so newer mapping fields cannot drift from the modern workspace path.
 * Updated the public plugin name to tporret API Data Importer for WordPress.org resubmission.
 
 = 1.2.4 =
@@ -256,6 +266,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.3.0 =
+Adds parent mapping and full media mappings while preserving existing import jobs and the legacy featured image source path fallback.
+
 = 1.2.5 =
 Plugin name update for WordPress.org resubmission. No functional upgrade impact.
 

@@ -34,6 +34,8 @@ It gives you:
 - Twig-based post title templates with safe sanitization.
 - Optional templates for new jobs (save connection first, map later).
 - Configurable target post type per import job.
+- Parent mapping for hierarchical post types using imported external IDs, WordPress IDs, or slugs.
+- Media mappings for featured images, gallery attachment IDs, and attachment-ID post meta.
 - Configurable default target post settings per import job (status, author, comment status, ping status).
 - React-powered tabbed Import Job Workspace for add/edit flows.
 - Queue-based batch processor to avoid timeout-heavy monolithic runs.
@@ -45,8 +47,10 @@ It gives you:
 ## Latest Release (1.3.0)
 
 - Deepened the import architecture into focused modules for validation, lifecycle execution, template rendering, security checks, repositories, media ingestion, cleanup, and edit-lock policy.
+- Added parent mapping for hierarchical post types and richer media mapping for featured, gallery, and meta attachment fields.
 - Added reporter auto-discovery so dashboard metrics self-register without touching central wiring.
 - Centralized post-type default normalization for REST saves and import runtime.
+- Centralized legacy admin-post import saves through the same validator used by REST create/update, preventing stale parallel field handling.
 - Preserved the existing REST API, admin UI, and import job compatibility while reducing duplicated control flow.
 
 ## Multisite Operation
@@ -115,11 +119,62 @@ Implementation details:
 - Import load now maps these settings into `wp_insert_post()` payloads.
 - Existing imported posts also receive discussion-setting updates through `wp_update_post()` during sync.
 
-### 4) Secure Media Sideload Helper (Foundation)
+### 4) Parent Mapping and Media Mappings
 
-A new static helper is available in the processing layer:
+The Mapping & Templating workspace can now configure relationship and media behavior beyond post content templates.
 
-- `TPORAPDI_Import_Processor::sideload_image( $image_url, $post_id, $is_featured = false )`
+#### Parent Mapping
+
+For hierarchical post types, each import job can map a source field to the imported post's parent.
+
+- Enabled only when the target post type is hierarchical.
+- `source_path` points to the parent identifier in each API record.
+- Lookup modes:
+  - `external_id`: find another item imported by the same job via its external ID.
+  - `wp_id`: use an existing WordPress post ID in the selected target post type.
+  - `slug`: find an existing post by slug in the selected target post type.
+- Missing-parent behavior:
+  - `defer`: import now and reconcile the parent after later chunks complete.
+  - `root`: import as a root item.
+  - `skip`: skip the item until the source data is corrected.
+
+Parent state is tracked with `_tporapdi_parent_external_id` and `_tporapdi_pending_parent_external_id` metadata so out-of-order API payloads can reconcile after chunk processing.
+
+#### Media Mappings
+
+Media mappings are stored per import job and take precedence over the legacy `featured_image_source_path` fallback.
+
+- `featured`: sideloads one image and sets it as the post thumbnail.
+- `gallery`: sideloads one or more images and stores attachment IDs in a configured meta key, defaulting to `_tporapdi_gallery_attachment_ids`.
+- `meta`: sideloads one or more images and stores attachment IDs in the configured meta key.
+- Each mapping can include `source_path`, optional `url_path`, and optional `alt_path`, `title_path`, `caption_path`, and `description_path` metadata paths.
+- Media downloads still use the plugin SSRF checks and idempotent `_tporapdi_source_url` deduplication.
+
+Example media mapping JSON:
+
+```json
+[
+  {
+    "role": "featured",
+    "source_path": "images.hero",
+    "url_path": "url",
+    "alt_path": "alt"
+  },
+  {
+    "role": "gallery",
+    "source_path": "images.gallery",
+    "url_path": "url",
+    "meta_key": "_gallery_attachment_ids"
+  }
+]
+```
+
+### 5) Secure Media Sideload Helper
+
+A focused media ingestor is available in the processing layer:
+
+- `Tporapdi_Media_Ingestor::sideload_image( $image_url, $post_id, $is_featured = false )`
+- `Tporapdi_Media_Ingestor::apply_media_mappings( $item, $post_id, $import_id, $mappings )`
 
 Design goals:
 
@@ -128,9 +183,7 @@ Design goals:
 - Safe error handling with logs in `wp_custom_import_logs`.
 - Optional featured image assignment via `set_post_thumbnail()`.
 
-Note: this helper is now implemented and available for integration into your field mapping/media ingestion strategy.
-
-### 5) Enterprise Reporting Engine & Dashboard (Tableau-Style)
+### 6) Enterprise Reporting Engine & Dashboard (Tableau-Style)
 
 A pluggable, high-performance reporting aggregator with real-time operational metrics and a React-based UI.
 
@@ -262,7 +315,7 @@ tporapdi_flush_reporting_transients(); // Clears all 9 reporter transients + his
 
 **Monitoring via WP-Cron:** All metrics are calculated on-demand and cached, so no background jobs required. Transient eviction is natural.
 
-### 6) Security Hardening — Credential Encryption & Data Sanitization
+### 7) Security Hardening — Credential Encryption & Data Sanitization
 
 Credential fields (`auth_token`, `auth_password`) are now encrypted at rest using AES-256-CBC with a key derived from `wp_salt('auth')`. Encrypted values are prefixed with `tporapdi_enc:` for identification — legacy plaintext values are handled gracefully during the transition.
 
@@ -274,7 +327,7 @@ Credential fields (`auth_token`, `auth_password`) are now encrypted at rest usin
 - **Custom meta sanitization**: Twig-compiled meta values are sanitized with `sanitize_text_field()` before `update_post_meta()`.
 - **Admin menu capability**: Menu pages now require `manage_options` instead of `read`, preventing subscriber-level access.
 
-### 7) Enhanced Security Hardening (5-Layer Defense)
+### 8) Enhanced Security Hardening (5-Layer Defense)
 
 #### ✅ Dedicated Template Management Capability
 
@@ -354,7 +407,7 @@ apply_filters( 'tporapdi_allow_internal_endpoints', false ); // default: block R
 add_filter( 'tporapdi_twig_strict_variables', function() { return false; } ); // permissive mode
 ```
 
-### 8) React Import Job Workspace + REST CRUD
+### 9) React Import Job Workspace + REST CRUD
 
 The import add/edit screen has been rebuilt as a React tabbed workspace using `@wordpress/components`.
 
@@ -368,8 +421,9 @@ The import add/edit screen has been rebuilt as a React tabbed workspace using `@
   - `POST /wp-json/tporret-api-data-importer/v1/import-jobs/{id}/template-sync`
 - API test endpoint (`/wp-json/tporret-api-data-importer/v1/test-api-connection`) now powers in-UI sample preview for mapping.
 - Dry-run endpoint (`/wp-json/tporret-api-data-importer/v1/dry-run`) supports template verification before import runs.
+- Legacy `admin-post.php` import save submissions are normalized through the same validator used by REST create/update, so newer mapping fields cannot drift from the modern UI path.
 
-### 9) Per-Import Edit-Lock Toggle
+### 10) Per-Import Edit-Lock Toggle
 
 You can now control edit behavior per import job from Mapping & Templating.
 
@@ -398,10 +452,13 @@ You can now control edit behavior per import job from Mapping & Templating.
 - Unique external key is resolved via `unique_id_path`.
 - Twig template renders post content.
 - Optional Twig title template renders post title.
+- Parent and media mapping configuration is resolved from validated job JSON.
 
 5. Load
 - Upsert logic identifies records by `_my_custom_api_id` + `_tporapdi_import_id`.
 - Records are inserted/updated in the selected post type.
+- Parent relationships are assigned or deferred for later reconciliation.
+- Media mappings sideload/dedupe attachments and apply featured image, gallery meta, or attachment-ID meta updates.
 - Sync timestamp and ownership metadata are maintained.
 
 6. Finalize
@@ -429,6 +486,8 @@ Configure:
 - Data Filters
 - Post Title Template (optional Twig)
 - Mapping Template (optional Twig for initial creation)
+- Parent Mapping (hierarchical post types only)
+- Media Mappings (featured, gallery, or attachment-ID meta)
 
 ### 2. Test Before Running
 
@@ -513,6 +572,8 @@ Recommended baseline:
     - `lock_editing`
     - `title_template`
     - `mapping_template`
+    - `parent_mapping`
+    - `media_mappings`
 
 - `wp_custom_import_temp`
   - staged payload fragments per import
