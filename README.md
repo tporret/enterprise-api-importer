@@ -44,7 +44,7 @@ It gives you:
 - Endpoint test, API data preview, and Twig dry-run tools before production execution.
 - Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
 
-## Latest Release (1.3.0)
+## Latest Release (1.3.1)
 
 - Deepened the import architecture into focused modules for validation, lifecycle execution, template rendering, security checks, repositories, media ingestion, cleanup, and edit-lock policy.
 - Added parent mapping for hierarchical post types and richer media mapping for featured, gallery, and meta attachment fields.

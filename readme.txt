@@ -5,7 +5,7 @@ Tags: api, import, etl, json, cron
 Requires at least: 6.3
 Tested up to: 7.0.0
 Requires PHP: 8.1
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -153,6 +153,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 
 == Changelog ==
 
+= 1.3.1 =
+* Maintenance release.
+
 = 1.3.0 =
 * **Architectural deepening release — no breaking changes to existing import jobs, REST API, or admin UI.**
 * Extracted `Tporapdi_Validator` module: single entry point for all import job field validation (auth, recurrence, templates, post defaults, meta mappings) replacing scattered inline checks in rest.php.
@@ -266,6 +269,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.3.1 =
+Maintenance release. No functional upgrade steps required.
+
 = 1.3.0 =
 Adds parent mapping and full media mappings while preserving existing import jobs and the legacy featured image source path fallback.
 
