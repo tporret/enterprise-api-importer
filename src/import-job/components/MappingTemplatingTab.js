@@ -203,6 +203,8 @@ export default function MappingTemplatingTab( {
 					auth_password: job.auth_password,
 					data_filters: {
 						array_path: job.array_path,
+						csv_delimiter: job.csv_delimiter,
+						xml_node_element: job.xml_node_element,
 						rules: (() => {
 							try {
 								return JSON.parse( job.filter_rules );

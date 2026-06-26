@@ -224,6 +224,8 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
 	$auth_username    = isset( $params['auth_username'] ) ? sanitize_text_field( (string) $params['auth_username'] ) : '';
 	$auth_password    = isset( $params['auth_password'] ) ? (string) $params['auth_password'] : '';
+	$csv_delimiter    = isset( $data_filters['csv_delimiter'] ) ? sanitize_key( (string) $data_filters['csv_delimiter'] ) : '';
+	$xml_node_element = isset( $data_filters['xml_node_element'] ) ? sanitize_text_field( (string) $data_filters['xml_node_element'] ) : '';
 
 	$title_template       = mb_substr( trim( sanitize_text_field( $title_template ) ), 0, 255 );
 	$allowed_mapping_html = array(
@@ -322,7 +324,7 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 
 	$raw_body   = (string) wp_remote_retrieve_body( $response );
 	$array_path = isset( $data_filters['array_path'] ) ? sanitize_text_field( (string) $data_filters['array_path'] ) : '';
-	$records    = tporapdi_extract_records_from_payload( $raw_body, $data_format, $array_path );
+	$records    = tporapdi_extract_records_from_payload( $raw_body, $data_format, $array_path, $xml_node_element, $csv_delimiter );
 
 	if ( is_wp_error( $records ) ) {
 		return new WP_REST_Response(
@@ -408,6 +410,8 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 	$params           = is_array( $params ) ? $params : array();
 	$api_url          = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
 	$array_path       = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
+	$csv_delimiter    = isset( $params['csv_delimiter'] ) ? sanitize_key( (string) $params['csv_delimiter'] ) : '';
+	$xml_node_element = isset( $params['xml_node_element'] ) ? sanitize_text_field( (string) $params['xml_node_element'] ) : '';
 	$data_format      = isset( $params['data_format'] ) ? sanitize_key( (string) $params['data_format'] ) : 'json';
 	$auth_method      = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
 	$auth_token       = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
@@ -457,7 +461,7 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 	}
 
 	$body           = (string) wp_remote_retrieve_body( $response );
-	$selected_array = tporapdi_extract_records_from_payload( $body, $data_format, $array_path );
+	$selected_array = tporapdi_extract_records_from_payload( $body, $data_format, $array_path, $xml_node_element, $csv_delimiter );
 	if ( is_wp_error( $selected_array ) ) {
 		return new WP_REST_Response(
 			array(

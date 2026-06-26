@@ -30,6 +30,8 @@ const DEFAULT_JOB = {
 	auth_username: '',
 	auth_password: '',
 	array_path: '',
+	csv_delimiter: '',
+	xml_node_element: '',
 	unique_id_path: 'id',
 	recurrence: 'off',
 	custom_interval_minutes: 30,

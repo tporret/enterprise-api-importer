@@ -39,6 +39,16 @@ export default function DataRulesTab( {
 	const [ previewing, setPreviewing ] = useState( false );
 	const rules = parseFilterRules( job.filter_rules );
 	const isIcal = 'ical' === job.data_format;
+	const isCsv = 'csv' === job.data_format;
+	const isXml = 'xml' === job.data_format;
+	const usesArrayPath = ! isIcal && ! isCsv && ! isXml;
+	const csvDelimiterOptions = [
+		{ label: __( 'Auto-detect', 'tporret-api-data-importer' ), value: '' },
+		{ label: __( 'Comma (,)', 'tporret-api-data-importer' ), value: 'comma' },
+		{ label: __( 'Tab', 'tporret-api-data-importer' ), value: 'tab' },
+		{ label: __( 'Semicolon (;)', 'tporret-api-data-importer' ), value: 'semicolon' },
+		{ label: __( 'Pipe (|)', 'tporret-api-data-importer' ), value: 'pipe' },
+	];
 
 	const setRules = useCallback(
 		( newRules ) => {
@@ -80,6 +90,8 @@ export default function DataRulesTab( {
 				data: {
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
+					csv_delimiter: job.csv_delimiter,
+					xml_node_element: job.xml_node_element,
 					data_format: job.data_format,
 					auth_method: job.auth_method,
 					auth_token: job.auth_token,
@@ -105,7 +117,7 @@ export default function DataRulesTab( {
 
 	return (
 		<div className="eapi-ij-tab-content">
-			{ ! isIcal && (
+			{ usesArrayPath && (
 				<div className="eapi-ij-field-with-action">
 					<TextControl
 						__next40pxDefaultSize
@@ -130,6 +142,43 @@ export default function DataRulesTab( {
 				</div>
 			) }
 
+			{ isCsv && (
+				<SelectControl
+					__next40pxDefaultSize
+					__nextHasNoMarginBottom
+					label={ __( 'CSV Delimiter', 'tporret-api-data-importer' ) }
+					value={ job.csv_delimiter || '' }
+					options={ csvDelimiterOptions }
+					onChange={ ( val ) => updateField( 'csv_delimiter', val ) }
+					help={ __( 'Leave on auto-detect unless the source file uses a known delimiter.', 'tporret-api-data-importer' ) }
+				/>
+			) }
+
+			{ isXml && (
+				<div className="eapi-ij-field-with-action">
+					<TextControl
+						__next40pxDefaultSize
+						__nextHasNoMarginBottom
+						label={ __( 'XML Node Element', 'tporret-api-data-importer' ) }
+						value={ job.xml_node_element || '' }
+						onChange={ ( val ) => updateField( 'xml_node_element', val ) }
+						help={ __( 'Repeating element to import, such as item for RSS or entry for Atom.', 'tporret-api-data-importer' ) }
+					/>
+					<Button
+						isSmall
+						variant="secondary"
+						isBusy={ previewing }
+						disabled={ previewing || ! job.endpoint_url || ! job.xml_node_element }
+						onClick={ handlePreviewRecord }
+						className="eapi-ij-preview-btn"
+					>
+						{ previewing
+							? __( 'Loading…', 'tporret-api-data-importer' )
+							: __( 'Preview First Record', 'tporret-api-data-importer' ) }
+					</Button>
+				</div>
+			) }
+
 			<TextControl
 				__next40pxDefaultSize
 				__nextHasNoMarginBottom
@@ -138,6 +187,10 @@ export default function DataRulesTab( {
 				onChange={ ( val ) => updateField( 'unique_id_path', val ) }
 				help={ isIcal
 					? __( 'Use instance_uid when each recurring event instance should become a distinct record; use uid to group recurrences.', 'tporret-api-data-importer' )
+					: isCsv
+						? __( 'Use a CSV header name from the first row. Duplicate or blank headers are normalized with column names and numeric suffixes.', 'tporret-api-data-importer' )
+					: isXml
+						? __( 'Use an XML child element name such as guid, id, or link.', 'tporret-api-data-importer' )
 					: __( 'Dot-path to the source unique identifier (example: CourseIDFull or data.course.id). Defaults to id when empty.', 'tporret-api-data-importer' ) }
 			/>
 

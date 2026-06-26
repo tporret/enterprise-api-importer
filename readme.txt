@@ -1,7 +1,7 @@
 === tporret API Data Importer ===
 Contributors: tporret
 Donate link: https://porretto.com/donate
-Tags: api, import, etl, json, cron
+Tags: api, import, etl, ical, xml
 Requires at least: 6.3
 Tested up to: 7.0.0
 Requires PHP: 8.1
@@ -22,7 +22,8 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
 
 - Multi-Connection Job Manager for organizing and scaling imports
 - React Tabbed Import Job Workspace (Source/Auth, Data Rules, Mapping/Templating, Automation)
-- Payload Format selection per import job (JSON or iCal .ics) with recurrence expansion support
+- Payload Format selection per import job (JSON, iCal .ics, CSV/TSV, or XML/RSS)
+- Format-aware extraction controls (JSON Array Path, CSV Delimiter, XML Node Element)
 - Advanced JSON array traversal and pre-stage data filtering to remove noise before insertion
 - Twig Templating Engine for complex logic, loops, and nested object mapping without drag-and-drop limitations
 - Twig-powered Post Title Templates with safe sanitization and fallback handling
@@ -108,6 +109,9 @@ Yes. Nested objects and arrays can be parsed and transformed through Twig templa
 
 = Can I import iCal feeds (ICS)? =
 Yes. Set Payload Format to iCal (.ics) and the importer will expand recurring events into normalized records.
+
+= Can I import CSV/TSV or XML/RSS feeds? =
+Yes. Set Payload Format to CSV/TSV or XML/RSS. CSV supports delimiter auto-detection (or manual override), and XML/RSS uses a configurable repeating node element (for example, `item` or `entry`).
 
 = Does it handle API authentication? =
 Yes. It supports four modes per import job: none, bearer token, custom API-key header, and basic auth.
@@ -207,6 +211,13 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 3. API Connection and Data Filtering rules.
 
 == Changelog ==
+
+= 1.5.0 =
+* Added CSV/TSV (`csv`) payload extraction support across endpoint testing, preview, dry-run, and import runtime.
+* Added XML/RSS (`xml`) payload extraction support with configurable repeating-node selection.
+* Added import-job persistence and schema migrations for `csv_delimiter` and `xml_node_element` settings.
+* Added streamed staging for CSV/XML extraction to reduce memory pressure on large payload imports.
+* Added dedicated CSV and XML parser modules with delimiter auto-detection and nested XML node normalization.
 
 = 1.4.0 =
 * Added per-import Payload Format selection with support for JSON and iCal (.ics) feeds.
@@ -332,6 +343,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.5.0 =
+Adds CSV/TSV and XML/RSS payload support with new per-job extraction settings (`CSV Delimiter` and `XML Node Element`). Existing imports keep their current behavior.
+
 = 1.4.0 =
 Adds JSON/iCal payload format selection and iCal recurrence expansion. Existing imports continue to default to JSON.
 

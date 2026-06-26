@@ -28,7 +28,7 @@ It gives you:
 - Multi-import job manager in wp-admin.
 - Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site.
 - External API extraction with flexible auth methods (`none`, `bearer`, `api_key_custom`, `basic_auth`).
-- Payload format selection per import job (`json` or `ical`) with recurring-event expansion support.
+- Payload format selection per import job (`json`, `ical`, `csv`, or `xml`) with recurrence, delimiter, and repeating-node controls.
 - JSON array path resolution for nested payloads.
 - Rule-based pre-stage filtering (AND logic).
 - Twig-based mapping templates for complex transformations.
@@ -107,6 +107,13 @@ if ( $imported_items->have_posts() ) {
 - Added schema support for the new `data_format` field, including upgrade-time column creation for existing installs.
 - Updated the React import workspace to expose Payload Format, pass it through preview/dry-run requests, and apply iCal-specific guidance for unique identifiers.
 - Preserved backwards compatibility for existing JSON imports by defaulting to `json` when no format is specified.
+
+## Current Development Changes (Unreleased)
+
+- Added CSV/TSV (`csv`) and XML/RSS (`xml`) payload format support to the shared extraction pipeline used by endpoint testing, preview, dry-run, and import runtime.
+- Added `csv_delimiter` and `xml_node_element` persistence/migrations for existing installs so format-specific settings remain stable across upgrades.
+- Added streaming extraction + staging for CSV/XML records to avoid materializing very large payloads in memory before queue writes.
+- Added dedicated parser modules for CSV and XML record normalization, including CSV delimiter auto-detection, XML repeating-node extraction, and format-aware unique ID guidance in the import workspace.
 
 ## Multisite Operation
 

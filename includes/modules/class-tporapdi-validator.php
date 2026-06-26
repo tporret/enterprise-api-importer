@@ -32,6 +32,8 @@ class TPORAPDI_Validator {
 		$auth_username              = isset( $params['auth_username'] ) ? sanitize_text_field( (string) $params['auth_username'] ) : '';
 		$auth_password              = isset( $params['auth_password'] ) ? (string) $params['auth_password'] : '';
 		$array_path                 = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
+		$csv_delimiter              = isset( $params['csv_delimiter'] ) ? sanitize_key( (string) $params['csv_delimiter'] ) : '';
+		$xml_node_element           = isset( $params['xml_node_element'] ) ? sanitize_text_field( (string) $params['xml_node_element'] ) : '';
 		$unique_id_path             = isset( $params['unique_id_path'] ) ? sanitize_text_field( (string) $params['unique_id_path'] ) : 'id';
 		$recurrence                 = isset( $params['recurrence'] ) ? sanitize_key( (string) $params['recurrence'] ) : 'off';
 		$custom_interval_minutes    = isset( $params['custom_interval_minutes'] ) ? absint( $params['custom_interval_minutes'] ) : 0;
@@ -51,7 +53,8 @@ class TPORAPDI_Validator {
 			return $required_check;
 		}
 
-		$data_format = $this->sanitize_data_format( $data_format );
+		$data_format   = $this->sanitize_data_format( $data_format );
+		$csv_delimiter = $this->sanitize_csv_delimiter( $csv_delimiter );
 
 		$auth_state       = $this->sanitize_auth_fields( $auth_method, $auth_token, $auth_header_name, $auth_username, $auth_password );
 		$auth_method      = $auth_state['auth_method'];
@@ -126,6 +129,8 @@ class TPORAPDI_Validator {
 			'auth_username'              => $auth_username,
 			'auth_password'              => $auth_password,
 			'array_path'                 => $array_path,
+			'csv_delimiter'              => $csv_delimiter,
+			'xml_node_element'           => $xml_node_element,
 			'unique_id_path'             => $unique_id_path,
 			'recurrence'                 => $recurrence,
 			'custom_interval_minutes'    => $custom_interval_minutes,
@@ -146,7 +151,7 @@ class TPORAPDI_Validator {
 			'media_mappings'             => $media_mappings_json,
 		);
 
-		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
+		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
 
 		return array(
 			'data'    => $data,
@@ -178,13 +183,30 @@ class TPORAPDI_Validator {
 	 * @return string
 	 */
 	private function sanitize_data_format( string $data_format ): string {
-		$allowed_formats = array( 'json', 'ical' );
+		$allowed_formats = tporapdi_get_supported_data_formats();
 
 		if ( ! in_array( $data_format, $allowed_formats, true ) ) {
 			return 'json';
 		}
 
 		return $data_format;
+	}
+
+	/**
+	 * Normalizes optional CSV delimiter override values.
+	 *
+	 * @param string $csv_delimiter CSV delimiter key.
+	 *
+	 * @return string
+	 */
+	private function sanitize_csv_delimiter( string $csv_delimiter ): string {
+		$allowed_delimiters = array( '', 'comma', 'tab', 'semicolon', 'pipe' );
+
+		if ( ! in_array( $csv_delimiter, $allowed_delimiters, true ) ) {
+			return '';
+		}
+
+		return $csv_delimiter;
 	}
 
 	/**

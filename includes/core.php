@@ -10,11 +10,31 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'TPORAPDI_DB_SCHEMA_VERSION' ) ) {
-	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260523-1' );
+	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260626-2' );
 }
 
 if ( ! defined( 'TPORAPDI_NETWORK_DB_SCHEMA_VERSION' ) ) {
 	define( 'TPORAPDI_NETWORK_DB_SCHEMA_VERSION', '20260412-1' );
+}
+
+/**
+ * Returns payload formats currently implemented by the extraction boundary.
+ *
+ * @return array<int, string>
+ */
+function tporapdi_get_supported_data_formats() {
+	return array( 'json', 'ical', 'csv', 'xml' );
+}
+
+/**
+ * Determines whether a payload format is currently supported.
+ *
+ * @param string $data_format Payload format key.
+ *
+ * @return bool
+ */
+function tporapdi_is_supported_data_format( string $data_format ): bool {
+	return in_array( sanitize_key( $data_format ), tporapdi_get_supported_data_formats(), true );
 }
 
 /**
@@ -63,6 +83,8 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 		auth_username varchar(191) NOT NULL DEFAULT '',
 		auth_password text NOT NULL DEFAULT '',
 		array_path varchar(191) NOT NULL DEFAULT '',
+		csv_delimiter varchar(20) NOT NULL DEFAULT '',
+		xml_node_element varchar(191) NOT NULL DEFAULT '',
 		unique_id_path varchar(191) NOT NULL DEFAULT 'id',
 		recurrence varchar(32) NOT NULL DEFAULT 'off',
 		custom_interval_minutes int(10) unsigned NOT NULL DEFAULT 0,
@@ -119,6 +141,8 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
 	tporapdi_ensure_imports_data_format_column();
+	tporapdi_ensure_imports_csv_delimiter_column();
+	tporapdi_ensure_imports_xml_node_element_column();
 	tporapdi_ensure_imports_auth_columns();
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();
@@ -224,6 +248,42 @@ function tporapdi_ensure_imports_data_format_column() {
 	if ( null === $exists ) {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN data_format varchar(20) NOT NULL DEFAULT 'json' AFTER endpoint_url", $table ) );
+	}
+}
+
+/**
+ * Ensures CSV delimiter override selection exists on the imports table.
+ *
+ * @return void
+ */
+function tporapdi_ensure_imports_csv_delimiter_column() {
+	global $wpdb;
+
+	$table = $wpdb->prefix . 'tporapdi_imports';
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'csv_delimiter' ) );
+	if ( null === $exists ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN csv_delimiter varchar(20) NOT NULL DEFAULT '' AFTER array_path", $table ) );
+	}
+}
+
+/**
+ * Ensures XML repeating-node selection exists on the imports table.
+ *
+ * @return void
+ */
+function tporapdi_ensure_imports_xml_node_element_column() {
+	global $wpdb;
+
+	$table = $wpdb->prefix . 'tporapdi_imports';
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'xml_node_element' ) );
+	if ( null === $exists ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN xml_node_element varchar(191) NOT NULL DEFAULT '' AFTER array_path", $table ) );
 	}
 }
 
@@ -452,6 +512,8 @@ function tporapdi_maybe_upgrade_schema() {
 
 	tporapdi_sync_template_management_capabilities();
 	tporapdi_ensure_imports_data_format_column();
+	tporapdi_ensure_imports_csv_delimiter_column();
+	tporapdi_ensure_imports_xml_node_element_column();
 	tporapdi_ensure_imports_auth_columns();
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();

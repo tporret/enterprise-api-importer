@@ -226,6 +226,8 @@ require_once __DIR__ . '/includes/modules/class-tporapdi-validator.php';
 require_once __DIR__ . '/includes/modules/class-tporapdi-template-engine.php';
 require_once __DIR__ . '/includes/modules/class-tporapdi-security-guard.php';
 require_once __DIR__ . '/includes/class-tporapdi-ical-parser.php';
+require_once __DIR__ . '/includes/class-tporapdi-csv-parser.php';
+require_once __DIR__ . '/includes/class-tporapdi-xml-parser.php';
 require_once __DIR__ . '/includes/import.php';
 require_once __DIR__ . '/includes/admin.php';
 require_once __DIR__ . '/includes/rest.php';

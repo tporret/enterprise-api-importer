@@ -1430,6 +1430,8 @@ function tporapdi_handle_test_import_endpoint() {
 	$auth_password    = (string) ( $import_job['auth_password'] ?? '' );
 	$data_format      = sanitize_key( (string) ( $import_job['data_format'] ?? 'json' ) );
 	$json_path        = trim( (string) $import_job['array_path'] );
+	$csv_delimiter    = sanitize_key( (string) ( $import_job['csv_delimiter'] ?? '' ) );
+	$xml_node_element = trim( (string) ( $import_job['xml_node_element'] ?? '' ) );
 
 	if ( '' === $endpoint ) {
 		$preview_result['message'] = __( 'No endpoint URL available to test.', 'tporret-api-data-importer' );
@@ -1464,7 +1466,7 @@ function tporapdi_handle_test_import_endpoint() {
 		exit;
 	}
 
-	$selected_payload = tporapdi_extract_records_from_payload( (string) $response['body'], $data_format, $json_path );
+	$selected_payload = tporapdi_extract_records_from_payload( (string) $response['body'], $data_format, $json_path, $xml_node_element, $csv_delimiter );
 	if ( is_wp_error( $selected_payload ) ) {
 		$preview_result['message'] = $selected_payload->get_error_message();
 		set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );

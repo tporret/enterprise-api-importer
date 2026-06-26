@@ -409,12 +409,29 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
  *
  * @param string $raw_body    Raw remote response body.
  * @param string $data_format Payload format key.
- * @param string $array_path  Dot-notation JSON array path.
+ * @param string $array_path       Dot-notation JSON array path.
+ * @param string $xml_node_element Repeating XML element name.
+ * @param string $csv_delimiter    CSV delimiter override key.
  *
  * @return array<int|string, mixed>|WP_Error
  */
-function tporapdi_extract_records_from_payload( string $raw_body, string $data_format, string $array_path ) {
+function tporapdi_extract_records_from_payload( string $raw_body, string $data_format, string $array_path, string $xml_node_element = '', string $csv_delimiter = '' ) {
 	$data_format = sanitize_key( $data_format );
+	if ( '' === $data_format ) {
+		$data_format = 'json';
+	}
+
+	if ( ! tporapdi_is_supported_data_format( $data_format ) ) {
+		return new WP_Error(
+			'tporapdi_unsupported_data_format',
+			sprintf(
+				/* translators: 1: unsupported payload format, 2: comma-separated supported formats. */
+				__( 'Unsupported payload format "%1$s". Supported formats are: %2$s.', 'tporret-api-data-importer' ),
+				$data_format,
+				implode( ', ', tporapdi_get_supported_data_formats() )
+			)
+		);
+	}
 
 	if ( 'ical' === $data_format ) {
 		if ( ! class_exists( 'TPORAPDI_Ical_Parser' ) ) {
@@ -422,6 +439,22 @@ function tporapdi_extract_records_from_payload( string $raw_body, string $data_f
 		}
 
 		return TPORAPDI_Ical_Parser::parse_and_expand( $raw_body );
+	}
+
+	if ( 'csv' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_CSV_Parser' ) ) {
+			return new WP_Error( 'tporapdi_csv_parser_unavailable', __( 'CSV parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		return TPORAPDI_CSV_Parser::parse( $raw_body, $csv_delimiter );
+	}
+
+	if ( 'xml' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_XML_Parser' ) ) {
+			return new WP_Error( 'tporapdi_xml_parser_unavailable', __( 'XML parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		return TPORAPDI_XML_Parser::parse( $raw_body, $xml_node_element );
 	}
 
 	$decoded_json = json_decode( $raw_body, true );
@@ -463,6 +496,8 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 	$auth_password    = (string) ( $import_job['auth_password'] ?? '' );
 	$data_format      = sanitize_key( (string) ( $import_job['data_format'] ?? 'json' ) );
 	$json_path        = trim( (string) $import_job['array_path'] );
+	$csv_delimiter    = sanitize_key( (string) ( $import_job['csv_delimiter'] ?? '' ) );
+	$xml_node_element = trim( (string) ( $import_job['xml_node_element'] ?? '' ) );
 
 	if ( '' === $endpoint ) {
 		return new WP_Error( 'tporapdi_missing_endpoint', __( 'API endpoint URL is not configured.', 'tporret-api-data-importer' ) );
@@ -476,14 +511,18 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 
 	$cached_payload = (string) $fetched_payload['body'];
 	$used_cache     = ! empty( $fetched_payload['used_cache'] );
+	$filter_rules   = tporapdi_decode_filter_rules_json( isset( $import_job['filter_rules'] ) ? (string) $import_job['filter_rules'] : '' );
 
-	$selected_array = tporapdi_extract_records_from_payload( $cached_payload, $data_format, $json_path );
+	if ( in_array( $data_format, array( 'csv', 'xml' ), true ) ) {
+		return tporapdi_extract_and_stage_streamed_records( $import_id, $cached_payload, $data_format, $filter_rules, $used_cache, $csv_delimiter, $xml_node_element );
+	}
+
+	$selected_array = tporapdi_extract_records_from_payload( $cached_payload, $data_format, $json_path, $xml_node_element, $csv_delimiter );
 
 	if ( is_wp_error( $selected_array ) ) {
 		return $selected_array;
 	}
 
-	$filter_rules = tporapdi_decode_filter_rules_json( isset( $import_job['filter_rules'] ) ? (string) $import_job['filter_rules'] : '' );
 	if ( ! empty( $filter_rules ) ) {
 		$selected_array = tporapdi_apply_filter_rules_to_records( $selected_array, $filter_rules );
 	}
@@ -523,6 +562,103 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 		'used_cache'   => $used_cache,
 		'row_count'    => $row_count,
 	);
+}
+
+/**
+ * Extracts CSV/XML records incrementally and stages chunks as they fill.
+ *
+ * @param int                               $import_id        Import job ID.
+ * @param string                            $raw_payload      Raw remote response body.
+ * @param string                            $data_format      Payload format key.
+ * @param array<int, array<string, string>> $filter_rules     Sanitized filter rules.
+ * @param bool                              $used_cache       Whether the remote payload came from cache.
+ * @param string                            $csv_delimiter    CSV delimiter override key.
+ * @param string                            $xml_node_element Repeating XML element name.
+ *
+ * @return array<string, mixed>|WP_Error
+ */
+function tporapdi_extract_and_stage_streamed_records( int $import_id, string $raw_payload, string $data_format, array $filter_rules, bool $used_cache, string $csv_delimiter, string $xml_node_element ) {
+	$staging_chunk_size = max( 1, (int) apply_filters( 'tporapdi_staging_chunk_size', 50 ) );
+	$chunk              = array();
+	$row_count          = 0;
+	$staging_rows       = 0;
+	$stage_record       = static function ( array $record ) use ( $import_id, $filter_rules, $staging_chunk_size, &$chunk, &$row_count, &$staging_rows ) {
+		if ( ! tporapdi_record_matches_filter_rules( $record, $filter_rules ) ) {
+			return true;
+		}
+
+		$chunk[] = $record;
+		++$row_count;
+
+		if ( count( $chunk ) < $staging_chunk_size ) {
+			return true;
+		}
+
+		return tporapdi_flush_staging_chunk( $import_id, $chunk, $staging_rows );
+	};
+
+	if ( 'csv' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_CSV_Parser' ) ) {
+			return new WP_Error( 'tporapdi_csv_parser_unavailable', __( 'CSV parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		$result = TPORAPDI_CSV_Parser::for_each_record( $raw_payload, $stage_record, $csv_delimiter );
+	} elseif ( 'xml' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_XML_Parser' ) ) {
+			return new WP_Error( 'tporapdi_xml_parser_unavailable', __( 'XML parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		$result = TPORAPDI_XML_Parser::for_each_record( $raw_payload, $stage_record, $xml_node_element );
+	} else {
+		return new WP_Error( 'tporapdi_unsupported_streaming_format', __( 'This payload format does not support streaming staging.', 'tporret-api-data-importer' ) );
+	}
+
+	if ( is_wp_error( $result ) ) {
+		return $result;
+	}
+
+	$flush_result = tporapdi_flush_staging_chunk( $import_id, $chunk, $staging_rows );
+	if ( is_wp_error( $flush_result ) ) {
+		return $flush_result;
+	}
+
+	return array(
+		'import_id'    => $import_id,
+		'staging_rows' => $staging_rows,
+		'used_cache'   => $used_cache,
+		'row_count'    => $row_count,
+	);
+}
+
+/**
+ * Flushes one extracted record chunk to the staging queue.
+ *
+ * @param int                             $import_id    Import job ID.
+ * @param array<int, array<string,mixed>> $chunk     Records waiting to be staged.
+ * @param int                             $staging_rows Number of staging rows written so far.
+ *
+ * @return true|WP_Error
+ */
+function tporapdi_flush_staging_chunk( int $import_id, array &$chunk, int &$staging_rows ) {
+	if ( empty( $chunk ) ) {
+		return true;
+	}
+
+	$serialized_chunk = wp_json_encode( $chunk, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+
+	if ( false === $serialized_chunk ) {
+		return new WP_Error( 'tporapdi_json_encode_failed', __( 'Failed to serialize extracted array for staging.', 'tporret-api-data-importer' ) );
+	}
+
+	$insert_id = tporapdi_db_insert_staging_payload( $import_id, $serialized_chunk );
+	if ( is_wp_error( $insert_id ) ) {
+		return $insert_id;
+	}
+
+	$chunk = array();
+	++$staging_rows;
+
+	return true;
 }
 
 /**
@@ -595,16 +731,7 @@ function tporapdi_apply_filter_rules_to_records( $selected_array, $filter_rules 
 			continue;
 		}
 
-		$passes_all_rules = true;
-		foreach ( $filter_rules as $filter_rule ) {
-			$record_value = tporapdi_get_item_value_by_path( $record, $filter_rule['key'] );
-			if ( ! tporapdi_evaluate_filter_rule( $record_value, $filter_rule['operator'], $filter_rule['value'] ) ) {
-				$passes_all_rules = false;
-				break;
-			}
-		}
-
-		if ( $passes_all_rules ) {
+		if ( tporapdi_record_matches_filter_rules( $record, $filter_rules ) ) {
 			$filtered[] = $record;
 		}
 	}
@@ -618,6 +745,25 @@ function tporapdi_apply_filter_rules_to_records( $selected_array, $filter_rules 
 	}
 
 	return (array) $filtered[0];
+}
+
+/**
+ * Checks whether a single record passes all configured filter rules.
+ *
+ * @param array<string, mixed>              $record       Extracted record.
+ * @param array<int, array<string, string>> $filter_rules Sanitized filter rules.
+ *
+ * @return bool
+ */
+function tporapdi_record_matches_filter_rules( array $record, array $filter_rules ): bool {
+	foreach ( $filter_rules as $filter_rule ) {
+		$record_value = tporapdi_get_item_value_by_path( $record, $filter_rule['key'] );
+		if ( ! tporapdi_evaluate_filter_rule( $record_value, $filter_rule['operator'], $filter_rule['value'] ) ) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 /**

@@ -14,7 +14,21 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 		if ( 'ical' === value && ( ! job.unique_id_path || 'id' === job.unique_id_path ) ) {
 			updateField( 'unique_id_path', 'instance_uid' );
 		}
-	}, [ job.unique_id_path, updateField ] );
+
+		if ( 'csv' === value && ( ! job.unique_id_path || 'id' === job.unique_id_path ) ) {
+			updateField( 'unique_id_path', '' );
+		}
+
+		if ( 'xml' === value ) {
+			if ( ! job.xml_node_element ) {
+				updateField( 'xml_node_element', 'item' );
+			}
+
+			if ( ! job.unique_id_path || 'id' === job.unique_id_path ) {
+				updateField( 'unique_id_path', 'guid' );
+			}
+		}
+	}, [ job.unique_id_path, job.xml_node_element, updateField ] );
 
 	const handleTestEndpoint = useCallback( async () => {
 		setTesting( true );
@@ -27,6 +41,8 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 				data: {
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
+					csv_delimiter: job.csv_delimiter,
+					xml_node_element: job.xml_node_element,
 					data_format: job.data_format,
 					auth_method: job.auth_method,
 					auth_token: job.auth_token,
@@ -83,6 +99,8 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 				options={ [
 					{ label: __( 'JSON', 'tporret-api-data-importer' ), value: 'json' },
 					{ label: __( 'iCal (.ics)', 'tporret-api-data-importer' ), value: 'ical' },
+					{ label: __( 'CSV/TSV', 'tporret-api-data-importer' ), value: 'csv' },
+					{ label: __( 'XML/RSS', 'tporret-api-data-importer' ), value: 'xml' },
 				] }
 				onChange={ handleDataFormatChange }
 			/>
