@@ -45,7 +45,7 @@ class Tporapdi_Job_Repository {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				'SELECT id, name, endpoint_url, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, featured_image_source_path, title_template, excerpt_template, post_name_template, mapping_template, lock_editing, post_status, comment_status, ping_status, custom_meta_mappings, parent_mapping, media_mappings, created_at
+				'SELECT id, name, endpoint_url, data_format, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, featured_image_source_path, title_template, excerpt_template, post_name_template, mapping_template, lock_editing, post_status, comment_status, ping_status, custom_meta_mappings, parent_mapping, media_mappings, created_at
 				FROM %i
 				ORDER BY id DESC',
 				$table
@@ -89,7 +89,7 @@ class Tporapdi_Job_Repository {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				'SELECT id, name, endpoint_url, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, featured_image_source_path, title_template, excerpt_template, post_name_template, mapping_template, lock_editing, post_status, comment_status, ping_status, custom_meta_mappings, parent_mapping, media_mappings, created_at
+				'SELECT id, name, endpoint_url, data_format, auth_method, auth_token, auth_header_name, auth_username, auth_password, array_path, unique_id_path, recurrence, custom_interval_minutes, filter_rules, target_post_type, featured_image_source_path, title_template, excerpt_template, post_name_template, mapping_template, lock_editing, post_status, comment_status, ping_status, custom_meta_mappings, parent_mapping, media_mappings, created_at
 				FROM %i
 				WHERE id = %d',
 				$table,

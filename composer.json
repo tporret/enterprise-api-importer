@@ -1,7 +1,11 @@
 {
+    "name": "tporret/enterprise-api-importer",
+    "description": "Enterprise ETL importer plugin for WordPress.",
+    "license": "GPL-2.0-or-later",
     "require": {
         "php": ">=8.1",
-        "twig/twig": "^3.24"
+        "twig/twig": "^3.24",
+        "sabre/vobject": "^4"
     },
     "config": {
         "allow-plugins": {

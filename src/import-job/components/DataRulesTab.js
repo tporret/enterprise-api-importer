@@ -38,6 +38,7 @@ export default function DataRulesTab( {
 } ) {
 	const [ previewing, setPreviewing ] = useState( false );
 	const rules = parseFilterRules( job.filter_rules );
+	const isIcal = 'ical' === job.data_format;
 
 	const setRules = useCallback(
 		( newRules ) => {
@@ -79,6 +80,7 @@ export default function DataRulesTab( {
 				data: {
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
+					data_format: job.data_format,
 					auth_method: job.auth_method,
 					auth_token: job.auth_token,
 					auth_header_name: job.auth_header_name,
@@ -103,28 +105,30 @@ export default function DataRulesTab( {
 
 	return (
 		<div className="eapi-ij-tab-content">
-			<div className="eapi-ij-field-with-action">
-				<TextControl
-					__next40pxDefaultSize
-					__nextHasNoMarginBottom
-					label={ __( 'JSON Array Path', 'tporret-api-data-importer' ) }
-					value={ job.array_path }
-					onChange={ ( val ) => updateField( 'array_path', val ) }
-					help={ __( 'Example: data.employees. Leave empty if the API root is already an array.', 'tporret-api-data-importer' ) }
-				/>
-				<Button
-					isSmall
-					variant="secondary"
-					isBusy={ previewing }
-					disabled={ previewing || ! job.endpoint_url }
-					onClick={ handlePreviewRecord }
-					className="eapi-ij-preview-btn"
-				>
-					{ previewing
-						? __( 'Loading…', 'tporret-api-data-importer' )
-						: __( 'Preview First Record', 'tporret-api-data-importer' ) }
-				</Button>
-			</div>
+			{ ! isIcal && (
+				<div className="eapi-ij-field-with-action">
+					<TextControl
+						__next40pxDefaultSize
+						__nextHasNoMarginBottom
+						label={ __( 'JSON Array Path', 'tporret-api-data-importer' ) }
+						value={ job.array_path }
+						onChange={ ( val ) => updateField( 'array_path', val ) }
+						help={ __( 'Example: data.employees. Leave empty if the API root is already an array.', 'tporret-api-data-importer' ) }
+					/>
+					<Button
+						isSmall
+						variant="secondary"
+						isBusy={ previewing }
+						disabled={ previewing || ! job.endpoint_url }
+						onClick={ handlePreviewRecord }
+						className="eapi-ij-preview-btn"
+					>
+						{ previewing
+							? __( 'Loading…', 'tporret-api-data-importer' )
+							: __( 'Preview First Record', 'tporret-api-data-importer' ) }
+					</Button>
+				</div>
+			) }
 
 			<TextControl
 				__next40pxDefaultSize
@@ -132,7 +136,9 @@ export default function DataRulesTab( {
 				label={ __( 'Unique ID Path', 'tporret-api-data-importer' ) }
 				value={ job.unique_id_path }
 				onChange={ ( val ) => updateField( 'unique_id_path', val ) }
-				help={ __( 'Dot-path to the source unique identifier (example: CourseIDFull or data.course.id). Defaults to id when empty.', 'tporret-api-data-importer' ) }
+				help={ isIcal
+					? __( 'Use instance_uid when each recurring event instance should become a distinct record; use uid to group recurrences.', 'tporret-api-data-importer' )
+					: __( 'Dot-path to the source unique identifier (example: CourseIDFull or data.course.id). Defaults to id when empty.', 'tporret-api-data-importer' ) }
 			/>
 
 			<div className="eapi-ij-filters">

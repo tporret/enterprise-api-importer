@@ -3,7 +3,7 @@
  * Plugin Name: tporret API Data Importer
  * Plugin URI:  https://github.com/tporret/enterprise-api-importer
  * Description: Highly secure enterprise ETL importer for WordPress.
- * Version:     1.3.1
+ * Version:     1.4.0
  * Author:      tporret
  * License:     GPL-2.0-or-later
  * Donate link: https://porretto.com/donate
@@ -28,7 +28,7 @@ if ( ! defined( 'TPORAPDI_PLUGIN_FILE' ) ) {
 }
 
 if ( ! defined( 'TPORAPDI_PLUGIN_VERSION' ) ) {
-	define( 'TPORAPDI_PLUGIN_VERSION', '1.3.1' );
+	define( 'TPORAPDI_PLUGIN_VERSION', '1.4.0' );
 }
 
 if ( ! defined( 'TPORAPDI_ADMIN_REST_NAMESPACE' ) ) {
@@ -131,6 +131,7 @@ function tporapdi_enforce_supported_multisite_activation_mode() {
 function tporapdi_get_required_dependency_files() {
 	return array(
 		__DIR__ . '/vendor/autoload.php',
+		__DIR__ . '/vendor/sabre/vobject/lib/Reader.php',
 		__DIR__ . '/vendor/twig/twig/src/Resources/core.php',
 		__DIR__ . '/vendor/twig/twig/src/Resources/debug.php',
 		__DIR__ . '/vendor/twig/twig/src/Resources/escaper.php',
@@ -224,6 +225,7 @@ require_once __DIR__ . '/includes/modules/class-tporapdi-import-runner.php';
 require_once __DIR__ . '/includes/modules/class-tporapdi-validator.php';
 require_once __DIR__ . '/includes/modules/class-tporapdi-template-engine.php';
 require_once __DIR__ . '/includes/modules/class-tporapdi-security-guard.php';
+require_once __DIR__ . '/includes/class-tporapdi-ical-parser.php';
 require_once __DIR__ . '/includes/import.php';
 require_once __DIR__ . '/includes/admin.php';
 require_once __DIR__ . '/includes/rest.php';

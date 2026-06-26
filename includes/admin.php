@@ -1428,6 +1428,7 @@ function tporapdi_handle_test_import_endpoint() {
 	$auth_header_name = trim( (string) ( $import_job['auth_header_name'] ?? '' ) );
 	$auth_username    = trim( (string) ( $import_job['auth_username'] ?? '' ) );
 	$auth_password    = (string) ( $import_job['auth_password'] ?? '' );
+	$data_format      = sanitize_key( (string) ( $import_job['data_format'] ?? 'json' ) );
 	$json_path        = trim( (string) $import_job['array_path'] );
 
 	if ( '' === $endpoint ) {
@@ -1463,25 +1464,7 @@ function tporapdi_handle_test_import_endpoint() {
 		exit;
 	}
 
-	$decoded_json = json_decode( (string) $response['body'], true );
-	if ( JSON_ERROR_NONE !== json_last_error() ) {
-		/* translators: %s is the JSON parser error message. */
-		$preview_result['message'] = sprintf( __( 'Endpoint responded but JSON decode failed: %s', 'tporret-api-data-importer' ), json_last_error_msg() );
-		set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
-		wp_safe_redirect(
-			add_query_arg(
-				array(
-					'page'   => TPORAPDI_ADMIN_PAGE_MANAGE_SLUG,
-					'action' => 'edit',
-					'id'     => $import_id,
-				),
-				admin_url( 'admin.php' )
-			)
-		);
-		exit;
-	}
-
-	$selected_payload = '' === $json_path ? $decoded_json : tporapdi_resolve_json_array_path( $decoded_json, $json_path );
+	$selected_payload = tporapdi_extract_records_from_payload( (string) $response['body'], $data_format, $json_path );
 	if ( is_wp_error( $selected_payload ) ) {
 		$preview_result['message'] = $selected_payload->get_error_message();
 		set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );

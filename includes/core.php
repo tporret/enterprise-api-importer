@@ -56,6 +56,7 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 		name varchar(191) NOT NULL,
 		endpoint_url text NOT NULL,
+		data_format varchar(20) NOT NULL DEFAULT 'json',
 		auth_method varchar(50) NOT NULL DEFAULT 'none',
 		auth_token text NOT NULL,
 		auth_header_name varchar(191) NOT NULL DEFAULT '',
@@ -117,6 +118,7 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 	dbDelta( $sql_imports );
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
+	tporapdi_ensure_imports_data_format_column();
 	tporapdi_ensure_imports_auth_columns();
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();
@@ -205,6 +207,24 @@ function tporapdi_maybe_upgrade_network_schema() {
 	}
 
 	tporapdi_activate_network_dashboard_storage();
+}
+
+/**
+ * Ensures payload format selection exists on the imports table.
+ *
+ * @return void
+ */
+function tporapdi_ensure_imports_data_format_column() {
+	global $wpdb;
+
+	$table = $wpdb->prefix . 'tporapdi_imports';
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'data_format' ) );
+	if ( null === $exists ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN data_format varchar(20) NOT NULL DEFAULT 'json' AFTER endpoint_url", $table ) );
+	}
 }
 
 /**
@@ -431,6 +451,7 @@ function tporapdi_maybe_upgrade_schema() {
 	}
 
 	tporapdi_sync_template_management_capabilities();
+	tporapdi_ensure_imports_data_format_column();
 	tporapdi_ensure_imports_auth_columns();
 	tporapdi_ensure_imports_featured_image_column();
 	tporapdi_ensure_imports_post_status_columns();

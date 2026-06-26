@@ -23,6 +23,7 @@ function valuesEqual( left, right ) {
 const DEFAULT_JOB = {
 	name: '',
 	endpoint_url: '',
+	data_format: 'json',
 	auth_method: 'none',
 	auth_token: '',
 	auth_header_name: '',

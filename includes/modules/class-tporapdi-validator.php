@@ -25,6 +25,7 @@ class TPORAPDI_Validator {
 	public function validate_import_job_fields( array $params ) {
 		$name                       = isset( $params['name'] ) ? sanitize_text_field( (string) $params['name'] ) : '';
 		$endpoint_url               = isset( $params['endpoint_url'] ) ? esc_url_raw( trim( (string) $params['endpoint_url'] ) ) : '';
+		$data_format                = isset( $params['data_format'] ) ? sanitize_key( (string) $params['data_format'] ) : 'json';
 		$auth_method                = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
 		$auth_token                 = isset( $params['auth_token'] ) ? sanitize_text_field( trim( (string) $params['auth_token'] ) ) : '';
 		$auth_header_name           = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
@@ -49,6 +50,8 @@ class TPORAPDI_Validator {
 		if ( $required_check instanceof WP_REST_Response ) {
 			return $required_check;
 		}
+
+		$data_format = $this->sanitize_data_format( $data_format );
 
 		$auth_state       = $this->sanitize_auth_fields( $auth_method, $auth_token, $auth_header_name, $auth_username, $auth_password );
 		$auth_method      = $auth_state['auth_method'];
@@ -116,6 +119,7 @@ class TPORAPDI_Validator {
 		$data = array(
 			'name'                       => $name,
 			'endpoint_url'               => $endpoint_url,
+			'data_format'                => $data_format,
 			'auth_method'                => $auth_method,
 			'auth_token'                 => $auth_token,
 			'auth_header_name'           => $auth_header_name,
@@ -142,7 +146,7 @@ class TPORAPDI_Validator {
 			'media_mappings'             => $media_mappings_json,
 		);
 
-		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
+		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
 
 		return array(
 			'data'    => $data,
@@ -164,6 +168,23 @@ class TPORAPDI_Validator {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Normalizes the configured payload format.
+	 *
+	 * @param string $data_format Payload format key.
+	 *
+	 * @return string
+	 */
+	private function sanitize_data_format( string $data_format ): string {
+		$allowed_formats = array( 'json', 'ical' );
+
+		if ( ! in_array( $data_format, $allowed_formats, true ) ) {
+			return 'json';
+		}
+
+		return $data_format;
 	}
 
 	/**

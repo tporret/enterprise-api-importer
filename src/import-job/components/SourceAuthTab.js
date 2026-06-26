@@ -8,6 +8,14 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 	const [ testing, setTesting ] = useState( false );
 	const [ testResult, setTestResult ] = useState( null );
 
+	const handleDataFormatChange = useCallback( ( value ) => {
+		updateField( 'data_format', value );
+
+		if ( 'ical' === value && ( ! job.unique_id_path || 'id' === job.unique_id_path ) ) {
+			updateField( 'unique_id_path', 'instance_uid' );
+		}
+	}, [ job.unique_id_path, updateField ] );
+
 	const handleTestEndpoint = useCallback( async () => {
 		setTesting( true );
 		setTestResult( null );
@@ -19,6 +27,7 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 				data: {
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
+					data_format: job.data_format,
 					auth_method: job.auth_method,
 					auth_token: job.auth_token,
 					auth_header_name: job.auth_header_name,
@@ -64,6 +73,18 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 				value={ job.endpoint_url }
 				onChange={ ( val ) => updateField( 'endpoint_url', val ) }
 				required
+			/>
+
+			<SelectControl
+				__next40pxDefaultSize
+				__nextHasNoMarginBottom
+				label={ __( 'Payload Format', 'tporret-api-data-importer' ) }
+				value={ job.data_format || 'json' }
+				options={ [
+					{ label: __( 'JSON', 'tporret-api-data-importer' ), value: 'json' },
+					{ label: __( 'iCal (.ics)', 'tporret-api-data-importer' ), value: 'ical' },
+				] }
+				onChange={ handleDataFormatChange }
 			/>
 
 			<AuthSettings job={ job } updateField={ updateField } />

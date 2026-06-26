@@ -193,6 +193,7 @@ export default function MappingTemplatingTab( {
 				method: 'POST',
 				data: {
 					api_url: job.endpoint_url,
+					data_format: job.data_format,
 					title_template: job.title_template,
 					body_template: job.mapping_template,
 					auth_method: job.auth_method,

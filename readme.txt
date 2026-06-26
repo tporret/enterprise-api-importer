@@ -5,7 +5,7 @@ Tags: api, import, etl, json, cron
 Requires at least: 6.3
 Tested up to: 7.0.0
 Requires PHP: 8.1
-Stable tag: 1.3.1
+Stable tag: 1.4.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -22,6 +22,7 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
 
 - Multi-Connection Job Manager for organizing and scaling imports
 - React Tabbed Import Job Workspace (Source/Auth, Data Rules, Mapping/Templating, Automation)
+- Payload Format selection per import job (JSON or iCal .ics) with recurrence expansion support
 - Advanced JSON array traversal and pre-stage data filtering to remove noise before insertion
 - Twig Templating Engine for complex logic, loops, and nested object mapping without drag-and-drop limitations
 - Twig-powered Post Title Templates with safe sanitization and fallback handling
@@ -105,6 +106,9 @@ No. It uses native WP-Cron scheduling, but supports CLI triggers.
 = Can I parse nested JSON arrays? =
 Yes. Nested objects and arrays can be parsed and transformed through Twig templating.
 
+= Can I import iCal feeds (ICS)? =
+Yes. Set Payload Format to iCal (.ics) and the importer will expand recurring events into normalized records.
+
 = Does it handle API authentication? =
 Yes. It supports four modes per import job: none, bearer token, custom API-key header, and basic auth.
 
@@ -113,6 +117,57 @@ Yes. Use Post Title Template with Twig syntax. If left blank, the importer falls
 
 = Can I import into custom post types? =
 Yes. Select any public post type from Target Post Type. If the selected post type becomes unavailable, imports safely fall back to post.
+
+= How do I list imported items on the front end? =
+Imported items are saved as the public tporapdi_item post type. You can list them with a normal archive template such as archive-tporapdi_item.php, or with a WP_Query that sets post_type to tporapdi_item. The plugin does not include a dedicated front-end block for imported-item listings.
+
+Example archive template:
+
+```php
+<?php get_header(); ?>
+
+<main class="site-main">
+  <?php if ( have_posts() ) : ?>
+    <header class="page-header">
+      <h1 class="page-title"><?php post_type_archive_title(); ?></h1>
+    </header>
+
+    <?php while ( have_posts() ) : the_post(); ?>
+      <article <?php post_class(); ?>>
+        <h2><a href="<?php the_permalink(); ?>"><?php the_title(); ?></a></h2>
+        <div class="entry-summary"><?php the_excerpt(); ?></div>
+      </article>
+    <?php endwhile; ?>
+
+    <?php the_posts_pagination(); ?>
+  <?php else : ?>
+    <p>No imported items found.</p>
+  <?php endif; ?>
+</main>
+
+<?php get_footer(); ?>
+```
+
+Example WP_Query loop:
+
+```php
+$imported_items = new WP_Query(
+  array(
+    'post_type'      => 'tporapdi_item',
+    'post_status'    => 'publish',
+    'posts_per_page' => 10,
+  )
+);
+
+if ( $imported_items->have_posts() ) {
+  while ( $imported_items->have_posts() ) {
+    $imported_items->the_post();
+    echo '<h2><a href="' . esc_url( get_permalink() ) . '">' . esc_html( get_the_title() ) . '</a></h2>';
+  }
+
+  wp_reset_postdata();
+}
+```
 
 = How does this work on multisite? =
 Each subsite keeps its own import jobs, schedules, settings, and dashboard. A separate Network Admin dashboard can summarize active subsites when the plugin is also active on the primary site. Activate the plugin per site; Network Activate is intentionally blocked.
@@ -152,6 +207,14 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 3. API Connection and Data Filtering rules.
 
 == Changelog ==
+
+= 1.4.0 =
+* Added per-import Payload Format selection with support for JSON and iCal (.ics) feeds.
+* Added iCal parsing and recurrence expansion with normalized event fields (`uid`, `instance_uid`, start/end dates, all-day flag).
+* Unified payload extraction for endpoint test, REST preview, dry-run, and import runtime to keep behavior consistent.
+* Added database migration support for the new `data_format` column on existing installs.
+* Updated the import workspace to pass payload format through preview and dry-run requests, with iCal-specific Unique ID guidance.
+* Added `sabre/vobject` as a runtime dependency for iCal parsing.
 
 = 1.3.1 =
 * Maintenance release.
@@ -269,6 +332,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.4.0 =
+Adds JSON/iCal payload format selection and iCal recurrence expansion. Existing imports continue to default to JSON.
+
 = 1.3.1 =
 Maintenance release. No functional upgrade steps required.
 

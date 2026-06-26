@@ -218,6 +218,7 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 	$data_filters     = isset( $params['data_filters'] ) && is_array( $params['data_filters'] ) ? $params['data_filters'] : array();
 	$title_template   = isset( $params['title_template'] ) ? (string) $params['title_template'] : '';
 	$body_template    = isset( $params['body_template'] ) ? (string) $params['body_template'] : '';
+	$data_format      = isset( $params['data_format'] ) ? sanitize_key( (string) $params['data_format'] ) : 'json';
 	$auth_token       = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
 	$auth_method      = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
 	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
@@ -319,30 +320,14 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 		);
 	}
 
-	$raw_body = (string) wp_remote_retrieve_body( $response );
-	$decoded  = json_decode( $raw_body, true );
-
-	if ( JSON_ERROR_NONE !== json_last_error() ) {
-		return new WP_REST_Response(
-			array(
-				'code'    => 'tporapdi_invalid_json',
-				'message' => sprintf(
-					/* translators: %s is JSON decode error text. */
-					esc_html__( 'Unable to parse API JSON: %s', 'tporret-api-data-importer' ),
-					json_last_error_msg()
-				),
-			),
-			400
-		);
-	}
-
+	$raw_body   = (string) wp_remote_retrieve_body( $response );
 	$array_path = isset( $data_filters['array_path'] ) ? sanitize_text_field( (string) $data_filters['array_path'] ) : '';
-	$records    = '' === $array_path ? $decoded : tporapdi_resolve_json_array_path( $decoded, $array_path );
+	$records    = tporapdi_extract_records_from_payload( $raw_body, $data_format, $array_path );
 
 	if ( is_wp_error( $records ) ) {
 		return new WP_REST_Response(
 			array(
-				'code'    => 'tporapdi_invalid_array_path',
+				'code'    => $records->get_error_code(),
 				'message' => $records->get_error_message(),
 			),
 			400
@@ -423,6 +408,7 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 	$params           = is_array( $params ) ? $params : array();
 	$api_url          = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
 	$array_path       = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
+	$data_format      = isset( $params['data_format'] ) ? sanitize_key( (string) $params['data_format'] ) : 'json';
 	$auth_method      = isset( $params['auth_method'] ) ? sanitize_key( (string) $params['auth_method'] ) : 'none';
 	$auth_token       = isset( $params['auth_token'] ) ? trim( (string) $params['auth_token'] ) : '';
 	$auth_header_name = isset( $params['auth_header_name'] ) ? sanitize_text_field( (string) $params['auth_header_name'] ) : '';
@@ -470,24 +456,8 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 		);
 	}
 
-	$body         = wp_remote_retrieve_body( $response );
-	$decoded_json = json_decode( (string) $body, true );
-
-	if ( JSON_ERROR_NONE !== json_last_error() ) {
-		return new WP_REST_Response(
-			array(
-				'code'    => 'tporapdi_invalid_json',
-				'message' => sprintf(
-					/* translators: %s is the JSON parser error message. */
-					esc_html__( 'API returned invalid JSON: %s', 'tporret-api-data-importer' ),
-					json_last_error_msg()
-				),
-			),
-			400
-		);
-	}
-
-	$selected_array = tporapdi_resolve_json_array_path( $decoded_json, $array_path );
+	$body           = (string) wp_remote_retrieve_body( $response );
+	$selected_array = tporapdi_extract_records_from_payload( $body, $data_format, $array_path );
 	if ( is_wp_error( $selected_array ) ) {
 		return new WP_REST_Response(
 			array(

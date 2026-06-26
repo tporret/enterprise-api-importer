@@ -20,9 +20,13 @@ Bundled packages (fill in):
 
 | Package | Version | License | Source / Link | GPL-compatible? | Notes |
 |---------|---------|---------|---------------|-----------------|-------|
-| twig/twig | 3.24 (example) | (fill) | https://github.com/twigphp/Twig | (yes/no) | Twig is typically BSD/MIT-style; verify compatibility |
-| symfony/polyfill-mbstring | (fill) | (fill) | https://github.com/symfony/polyfill-mbstring | (yes/no) | Runtime polyfill used by Twig/symfony components |
-| symfony/deprecation-contracts | (fill) | (fill) | https://github.com/symfony/deprecation-contracts | (yes/no) | Dev/runtime — include only if bundled in vendor/ for runtime |
+| twig/twig | 3.27.1 | BSD-3-Clause | https://github.com/twigphp/Twig | yes | Runtime template engine |
+| sabre/vobject | 4.6.0 | BSD-3-Clause | https://github.com/sabre-io/vobject | yes | Runtime iCal/vCard parser used for ICS extraction and recurrence expansion |
+| sabre/uri | 3.1.0 | BSD-3-Clause | https://github.com/sabre-io/uri | yes | Runtime dependency of sabre/vobject |
+| sabre/xml | 4.1.0 | BSD-3-Clause | https://github.com/sabre-io/xml | yes | Runtime dependency of sabre/vobject |
+| symfony/polyfill-mbstring | 1.38.2 | MIT | https://github.com/symfony/polyfill-mbstring | yes | Runtime polyfill used by Twig/symfony components |
+| symfony/polyfill-ctype | 1.37.0 | MIT | https://github.com/symfony/polyfill-ctype | yes | Runtime polyfill used by Twig/symfony components |
+| symfony/deprecation-contracts | 3.7.0 | MIT | https://github.com/symfony/deprecation-contracts | yes | Runtime dependency used by Twig/symfony components |
 
 If there are additional bundled packages in `vendor/`, append rows for each with the same columns.
 

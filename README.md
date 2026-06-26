@@ -28,6 +28,7 @@ It gives you:
 - Multi-import job manager in wp-admin.
 - Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site.
 - External API extraction with flexible auth methods (`none`, `bearer`, `api_key_custom`, `basic_auth`).
+- Payload format selection per import job (`json` or `ical`) with recurring-event expansion support.
 - JSON array path resolution for nested payloads.
 - Rule-based pre-stage filtering (AND logic).
 - Twig-based mapping templates for complex transformations.
@@ -43,15 +44,69 @@ It gives you:
 - Health and schedule dashboard with run stats and trigger source visibility.
 - Endpoint test, API data preview, and Twig dry-run tools before production execution.
 - Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
+- Imported items are saved as the public `tporapdi_item` post type, so you can list them with normal WordPress archive templates or custom `WP_Query` loops.
+- The plugin does not ship a dedicated front-end block for imported-item listings; use the CPT archive or a theme/query template instead.
 
-## Latest Release (1.3.1)
+### Listing Imported Items
 
-- Deepened the import architecture into focused modules for validation, lifecycle execution, template rendering, security checks, repositories, media ingestion, cleanup, and edit-lock policy.
-- Added parent mapping for hierarchical post types and richer media mapping for featured, gallery, and meta attachment fields.
-- Added reporter auto-discovery so dashboard metrics self-register without touching central wiring.
-- Centralized post-type default normalization for REST saves and import runtime.
-- Centralized legacy admin-post import saves through the same validator used by REST create/update, preventing stale parallel field handling.
-- Preserved the existing REST API, admin UI, and import job compatibility while reducing duplicated control flow.
+Because imported items are stored in the public `tporapdi_item` post type, you can list them using normal WordPress theme templates or a custom query.
+
+Example archive template: create `archive-tporapdi_item.php` in your theme.
+
+```php
+<?php get_header(); ?>
+
+<main class="site-main">
+  <?php if ( have_posts() ) : ?>
+    <header class="page-header">
+      <h1 class="page-title"><?php post_type_archive_title(); ?></h1>
+    </header>
+
+    <?php while ( have_posts() ) : the_post(); ?>
+      <article <?php post_class(); ?>>
+        <h2><a href="<?php the_permalink(); ?>"><?php the_title(); ?></a></h2>
+        <div class="entry-summary"><?php the_excerpt(); ?></div>
+      </article>
+    <?php endwhile; ?>
+
+    <?php the_posts_pagination(); ?>
+  <?php else : ?>
+    <p>No imported items found.</p>
+  <?php endif; ?>
+</main>
+
+<?php get_footer(); ?>
+```
+
+Example `WP_Query` loop:
+
+```php
+$imported_items = new WP_Query(
+  array(
+    'post_type'      => 'tporapdi_item',
+    'post_status'    => 'publish',
+    'posts_per_page' => 10,
+  )
+);
+
+if ( $imported_items->have_posts() ) {
+  while ( $imported_items->have_posts() ) {
+    $imported_items->the_post();
+    echo '<h2><a href="' . esc_url( get_permalink() ) . '">' . esc_html( get_the_title() ) . '</a></h2>';
+  }
+
+  wp_reset_postdata();
+}
+```
+
+## Latest Release (1.4.0)
+
+- Added payload format selection per import job with support for `JSON` and `iCal (.ics)` sources.
+- Added an iCal parser and recurrence expansion pipeline using `sabre/vobject`, including normalized event fields such as `uid`, `instance_uid`, start/end dates, and all-day status.
+- Unified payload extraction across admin endpoint tests, REST API previews, dry-runs, and import runtime via a shared extraction function.
+- Added schema support for the new `data_format` field, including upgrade-time column creation for existing installs.
+- Updated the React import workspace to expose Payload Format, pass it through preview/dry-run requests, and apply iCal-specific guidance for unique identifiers.
+- Preserved backwards compatibility for existing JSON imports by defaulting to `json` when no format is specified.
 
 ## Multisite Operation
 

@@ -405,6 +405,42 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
 }
 
 /**
+ * Extracts import records from a raw payload according to the configured format.
+ *
+ * @param string $raw_body    Raw remote response body.
+ * @param string $data_format Payload format key.
+ * @param string $array_path  Dot-notation JSON array path.
+ *
+ * @return array<int|string, mixed>|WP_Error
+ */
+function tporapdi_extract_records_from_payload( string $raw_body, string $data_format, string $array_path ) {
+	$data_format = sanitize_key( $data_format );
+
+	if ( 'ical' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_Ical_Parser' ) ) {
+			return new WP_Error( 'tporapdi_ical_parser_unavailable', __( 'iCal parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		return TPORAPDI_Ical_Parser::parse_and_expand( $raw_body );
+	}
+
+	$decoded_json = json_decode( $raw_body, true );
+
+	if ( JSON_ERROR_NONE !== json_last_error() ) {
+		return new WP_Error(
+			'tporapdi_invalid_json',
+			sprintf(
+				/* translators: %s is a JSON parser error message. */
+				__( 'Unable to decode API JSON payload: %s', 'tporret-api-data-importer' ),
+				json_last_error_msg()
+			)
+		);
+	}
+
+	return tporapdi_resolve_json_array_path( $decoded_json, $array_path );
+}
+
+/**
  * Extracts API data and stages the selected array into the temp table.
  *
  * @param int $import_id Import job ID.
@@ -425,6 +461,7 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 	$auth_header_name = trim( (string) ( $import_job['auth_header_name'] ?? '' ) );
 	$auth_username    = trim( (string) ( $import_job['auth_username'] ?? '' ) );
 	$auth_password    = (string) ( $import_job['auth_password'] ?? '' );
+	$data_format      = sanitize_key( (string) ( $import_job['data_format'] ?? 'json' ) );
 	$json_path        = trim( (string) $import_job['array_path'] );
 
 	if ( '' === $endpoint ) {
@@ -440,20 +477,7 @@ function tporapdi_extract_and_stage_data( $import_id ) {
 	$cached_payload = (string) $fetched_payload['body'];
 	$used_cache     = ! empty( $fetched_payload['used_cache'] );
 
-	$decoded_json = json_decode( (string) $cached_payload, true );
-
-	if ( JSON_ERROR_NONE !== json_last_error() ) {
-		return new WP_Error(
-			'tporapdi_invalid_json',
-			sprintf(
-				/* translators: %s is a JSON parser error message. */
-				__( 'Unable to decode API JSON payload: %s', 'tporret-api-data-importer' ),
-				json_last_error_msg()
-			)
-		);
-	}
-
-	$selected_array = tporapdi_resolve_json_array_path( $decoded_json, $json_path );
+	$selected_array = tporapdi_extract_records_from_payload( $cached_payload, $data_format, $json_path );
 
 	if ( is_wp_error( $selected_array ) ) {
 		return $selected_array;
