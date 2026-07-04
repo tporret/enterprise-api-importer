@@ -31,7 +31,7 @@ function tporapdi_init_reporting() {
 	// TPORAPDI_Reporting_Aggregator::register() at load time.
 	$reporter_files = glob( $dir . '/reporters/class-tporapdi-reporter-*.php' );
 
-	foreach ( $reporter_files ?: array() as $reporter_file ) {
+	foreach ( $reporter_files ? $reporter_files : array() as $reporter_file ) {
 		require_once $reporter_file;
 	}
 

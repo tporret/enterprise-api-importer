@@ -87,7 +87,7 @@ function tporapdi_db_save_network_snapshot( array $snapshot ): bool {
 		return false;
 	}
 
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$result = $wpdb->replace(
 		$table,
 		$data,
@@ -141,7 +141,7 @@ function tporapdi_db_delete_network_snapshot( int $blog_id ): bool {
 		return false;
 	}
 
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$deleted = $wpdb->delete( $table, array( 'blog_id' => $blog_id ), array( '%d' ) );
 
 	return false !== $deleted;

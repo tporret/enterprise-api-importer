@@ -25,6 +25,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 class TPORAPDI_Security_Guard {
 
 	/**
+	 * Per-request DNS resolution cache, keyed by host.
+	 *
+	 * @var array<string, string[]>
+	 */
+	private $dns_cache = array();
+
+	/**
 	 * Validates a remote endpoint URL against the full plugin security policy:
 	 * HTTPS requirement, hostname allowlist, CIDR allowlist, and SSRF block-list.
 	 *
@@ -156,13 +163,13 @@ class TPORAPDI_Security_Guard {
 			return new WP_Error( 'tporapdi_template_too_complex', __( 'Template has too many Twig expressions.', 'tporret-api-data-importer' ) );
 		}
 
-		if ( 1 === preg_match( '/\{\%\s*(include|source|import|from|embed|extends|use|macro)\b/i', $template ) ) {
+		if ( 1 === preg_match( '/\{\%[-~]?\s*(include|source|import|from|embed|extends|use|macro)\b/i', $template ) ) {
 			return new WP_Error( 'tporapdi_template_disallowed_tag', __( 'Template uses disallowed Twig tags.', 'tporret-api-data-importer' ) );
 		}
 
 		$max_nesting = (int) apply_filters( 'tporapdi_template_max_nesting_depth', 12, $type );
 		$tokens      = array();
-		$token_match = preg_match_all( '/\{\%\s*(if|for|endif|endfor)\b[^%]*\%\}/i', $template, $tokens );
+		$token_match = preg_match_all( '/\{\%[-~]?\s*(if|for|endif|endfor)\b[^%]*\%\}/i', $template, $tokens );
 		$depth       = 0;
 		$max_seen    = 0;
 
@@ -243,6 +250,10 @@ class TPORAPDI_Security_Guard {
 			return array( $host );
 		}
 
+		if ( isset( $this->dns_cache[ $host ] ) ) {
+			return $this->dns_cache[ $host ];
+		}
+
 		$ips = array();
 
 		if ( function_exists( 'dns_get_record' ) ) {
@@ -272,7 +283,9 @@ class TPORAPDI_Security_Guard {
 			}
 		}
 
-		return array_values( array_unique( array_filter( $ips, 'is_string' ) ) );
+		$this->dns_cache[ $host ] = array_values( array_unique( array_filter( $ips, 'is_string' ) ) );
+
+		return $this->dns_cache[ $host ];
 	}
 
 	/**
@@ -301,7 +314,14 @@ class TPORAPDI_Security_Guard {
 			return true;
 		}
 
-		foreach ( $this->resolve_ips( $host ) as $ip ) {
+		$ips = $this->resolve_ips( $host );
+
+		// ponytail: fail closed — unresolvable here can still resolve for curl (e.g. "127.1").
+		if ( empty( $ips ) ) {
+			return true;
+		}
+
+		foreach ( $ips as $ip ) {
 			if ( $this->is_private_ip( $ip ) ) {
 				return true;
 			}

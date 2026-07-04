@@ -24,8 +24,8 @@ function tporapdi_rest_permission_callback_post_type_defaults( WP_REST_Request $
 		return $nonce_check;
 	}
 
-	$post_type = $request->get_param( 'post_type' );
-	if ( ! post_type_exists( $post_type ) ) {
+	$post_type_object = get_post_type_object( (string) $request->get_param( 'post_type' ) );
+	if ( ! $post_type_object ) {
 		return new WP_Error(
 			'invalid_post_type',
 			esc_html__( 'Invalid post type.', 'tporret-api-data-importer' ),
@@ -33,9 +33,8 @@ function tporapdi_rest_permission_callback_post_type_defaults( WP_REST_Request $
 		);
 	}
 
-	// Check post-type-specific edit capability.
-	$capability = "edit_{$post_type}s";
-	if ( ! current_user_can( $capability ) ) {
+	// Check the post type's registered edit capability (handles custom capability_type mappings).
+	if ( ! current_user_can( $post_type_object->cap->edit_posts ) ) {
 		return new WP_Error(
 			'rest_forbidden',
 			esc_html__( 'You do not have permission to access defaults for this post type.', 'tporret-api-data-importer' ),
@@ -103,9 +102,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_dry_run_template_preview',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -115,9 +112,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_test_api_connection',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -128,16 +123,12 @@ function tporapdi_register_rest_routes() {
 			array(
 				'methods'             => 'GET',
 				'callback'            => 'tporapdi_rest_get_import_job',
-				'permission_callback' => static function ( WP_REST_Request $request ) {
-					return tporapdi_rest_permission_callback( $request );
-				},
+				'permission_callback' => 'tporapdi_rest_permission_callback',
 			),
 			array(
 				'methods'             => 'PUT',
 				'callback'            => 'tporapdi_rest_update_import_job',
-				'permission_callback' => static function ( WP_REST_Request $request ) {
-					return tporapdi_rest_permission_callback( $request );
-				},
+				'permission_callback' => 'tporapdi_rest_permission_callback',
 			),
 		)
 	);
@@ -148,9 +139,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_create_import_job',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -160,9 +149,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_run_import_job',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -172,9 +159,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_template_sync_import_job',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -184,9 +169,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'tporapdi_rest_cleanup_import_job',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback',
 		)
 	);
 
@@ -196,9 +179,7 @@ function tporapdi_register_rest_routes() {
 		array(
 			'methods'             => 'GET',
 			'callback'            => 'tporapdi_rest_get_post_type_defaults',
-			'permission_callback' => static function ( WP_REST_Request $request ) {
-				return tporapdi_rest_permission_callback_post_type_defaults( $request );
-			},
+			'permission_callback' => 'tporapdi_rest_permission_callback_post_type_defaults',
 		)
 	);
 }
@@ -508,6 +489,21 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 }
 
 /**
+ * Normalises an import job row for REST responses (type casts + credential masking).
+ *
+ * @param array<string, mixed> $row Import config row (already decrypted).
+ *
+ * @return array<string, mixed>
+ */
+function tporapdi_rest_prepare_import_job_response( array $row ) {
+	$row['id']                      = (int) $row['id'];
+	$row['custom_interval_minutes'] = absint( $row['custom_interval_minutes'] );
+	$row['lock_editing']            = (int) $row['lock_editing'];
+
+	return tporapdi_mask_import_credentials( $row );
+}
+
+/**
  * REST: Returns a single import job for the React workspace.
  *
  * @param WP_REST_Request $request REST request.
@@ -528,12 +524,7 @@ function tporapdi_rest_get_import_job( WP_REST_Request $request ) {
 		);
 	}
 
-	$row['id']                      = (int) $row['id'];
-	$row['custom_interval_minutes'] = absint( $row['custom_interval_minutes'] );
-	$row['lock_editing']            = (int) $row['lock_editing'];
-	$row                            = tporapdi_mask_import_credentials( $row );
-
-	return new WP_REST_Response( $row, 200 );
+	return new WP_REST_Response( tporapdi_rest_prepare_import_job_response( $row ), 200 );
 }
 
 /**
@@ -597,7 +588,9 @@ function tporapdi_rest_create_import_job( WP_REST_Request $request ) {
 	$saved = tporapdi_db_get_import_config( $import_id );
 
 	return new WP_REST_Response(
-		is_array( $saved ) ? array_merge( $saved, array( 'id' => $import_id ) ) : array( 'id' => $import_id ),
+		is_array( $saved )
+			? tporapdi_rest_prepare_import_job_response( array_merge( $saved, array( 'id' => $import_id ) ) )
+			: array( 'id' => $import_id ),
 		201
 	);
 }
@@ -649,7 +642,52 @@ function tporapdi_rest_update_import_job( WP_REST_Request $request ) {
 	$saved = tporapdi_db_get_import_config( $id );
 
 	return new WP_REST_Response(
-		is_array( $saved ) ? array_merge( $saved, array( 'id' => $id ) ) : array( 'id' => $id ),
+		is_array( $saved )
+			? tporapdi_rest_prepare_import_job_response( array_merge( $saved, array( 'id' => $id ) ) )
+			: array( 'id' => $id ),
+		200
+	);
+}
+
+/**
+ * Shared handler for endpoints that start a manual import run.
+ *
+ * @param int    $id              Import job ID.
+ * @param string $success_message Localised success message.
+ *
+ * @return WP_REST_Response
+ */
+function tporapdi_rest_start_manual_run_response( $id, $success_message ) {
+	$row = tporapdi_db_get_import_config( $id );
+
+	if ( ! is_array( $row ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'not_found',
+				'message' => esc_html__( 'Import job not found.', 'tporret-api-data-importer' ),
+			),
+			404
+		);
+	}
+
+	$start_result = tporapdi_get_import_runner()->start_manual_run( $id, 'manual' );
+	if ( is_wp_error( $start_result ) ) {
+		$status = 'import_running' === $start_result->get_error_code() ? 409 : 400;
+
+		return new WP_REST_Response(
+			array(
+				'code'    => $start_result->get_error_code(),
+				'message' => $start_result->get_error_message(),
+			),
+			$status
+		);
+	}
+
+	return new WP_REST_Response(
+		array(
+			'success' => true,
+			'message' => $success_message,
+		),
 		200
 	);
 }
@@ -662,38 +700,9 @@ function tporapdi_rest_update_import_job( WP_REST_Request $request ) {
  * @return WP_REST_Response
  */
 function tporapdi_rest_run_import_job( WP_REST_Request $request ) {
-	$id  = absint( $request->get_param( 'id' ) );
-	$row = tporapdi_db_get_import_config( $id );
-
-	if ( ! is_array( $row ) ) {
-		return new WP_REST_Response(
-			array(
-				'code'    => 'not_found',
-				'message' => esc_html__( 'Import job not found.', 'tporret-api-data-importer' ),
-			),
-			404
-		);
-	}
-
-	$start_result = tporapdi_get_import_runner()->start_manual_run( $id, 'manual' );
-	if ( is_wp_error( $start_result ) ) {
-		$status = 'import_running' === $start_result->get_error_code() ? 409 : 400;
-
-		return new WP_REST_Response(
-			array(
-				'code'    => $start_result->get_error_code(),
-				'message' => $start_result->get_error_message(),
-			),
-			$status
-		);
-	}
-
-	return new WP_REST_Response(
-		array(
-			'success' => true,
-			'message' => esc_html__( 'Import run started.', 'tporret-api-data-importer' ),
-		),
-		200
+	return tporapdi_rest_start_manual_run_response(
+		absint( $request->get_param( 'id' ) ),
+		esc_html__( 'Import run started.', 'tporret-api-data-importer' )
 	);
 }
 
@@ -705,38 +714,9 @@ function tporapdi_rest_run_import_job( WP_REST_Request $request ) {
  * @return WP_REST_Response
  */
 function tporapdi_rest_template_sync_import_job( WP_REST_Request $request ) {
-	$id  = absint( $request->get_param( 'id' ) );
-	$row = tporapdi_db_get_import_config( $id );
-
-	if ( ! is_array( $row ) ) {
-		return new WP_REST_Response(
-			array(
-				'code'    => 'not_found',
-				'message' => esc_html__( 'Import job not found.', 'tporret-api-data-importer' ),
-			),
-			404
-		);
-	}
-
-	$start_result = tporapdi_get_import_runner()->start_manual_run( $id, 'manual' );
-	if ( is_wp_error( $start_result ) ) {
-		$status = 'import_running' === $start_result->get_error_code() ? 409 : 400;
-
-		return new WP_REST_Response(
-			array(
-				'code'    => $start_result->get_error_code(),
-				'message' => $start_result->get_error_message(),
-			),
-			$status
-		);
-	}
-
-	return new WP_REST_Response(
-		array(
-			'success' => true,
-			'message' => esc_html__( 'Template sync started.', 'tporret-api-data-importer' ),
-		),
-		200
+	return tporapdi_rest_start_manual_run_response(
+		absint( $request->get_param( 'id' ) ),
+		esc_html__( 'Template sync started.', 'tporret-api-data-importer' )
 	);
 }
 

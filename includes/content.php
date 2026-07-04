@@ -148,7 +148,7 @@ function tporapdi_render_imported_items_read_only_notice() {
 		$has_locked = get_posts(
 			array(
 				'post_type'      => $screen->post_type,
-				'meta_key'       => '_tporapdi_import_id',
+				'meta_key'       => '_tporapdi_import_id', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Bounded existence check (1 post).
 				'meta_compare'   => 'EXISTS',
 				'posts_per_page' => 1,
 				'fields'         => 'ids',

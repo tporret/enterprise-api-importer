@@ -246,7 +246,7 @@ function tporapdi_ensure_imports_data_format_column() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'data_format' ) );
 	if ( null === $exists ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN data_format varchar(20) NOT NULL DEFAULT 'json' AFTER endpoint_url", $table ) );
 	}
 }
@@ -309,23 +309,23 @@ function tporapdi_ensure_imports_auth_columns() {
 
 	if ( null !== $legacy_col && null === $method_col ) {
 		// Add the new column first.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_method varchar(50) NOT NULL DEFAULT 'none' AFTER endpoint_url", $table ) );
 
 		// Map legacy values → new values.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'bearer' WHERE auth_header_type = 'bearer'", $table ) );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'api_key_custom', auth_header_name = 'Authorization-Key' WHERE auth_header_type = 'api-key' AND ( auth_header_name = '' OR auth_header_name IS NULL )", $table ) );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query( $wpdb->prepare( "UPDATE %i SET auth_method = 'api_key_custom' WHERE auth_header_type = 'api-key-header'", $table ) );
 
 		// Drop legacy column.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( 'ALTER TABLE %i DROP COLUMN auth_header_type', $table ) );
 	} elseif ( null === $method_col ) {
 		// Fresh install without legacy column — just add auth_method.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_method varchar(50) NOT NULL DEFAULT 'none' AFTER endpoint_url", $table ) );
 	}
 
@@ -333,7 +333,7 @@ function tporapdi_ensure_imports_auth_columns() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$header_name_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_header_name' ) );
 	if ( null === $header_name_col ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_header_name varchar(191) NOT NULL DEFAULT '' AFTER auth_token", $table ) );
 	}
 
@@ -341,7 +341,7 @@ function tporapdi_ensure_imports_auth_columns() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$username_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_username' ) );
 	if ( null === $username_col ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_username varchar(191) NOT NULL DEFAULT '' AFTER auth_header_name", $table ) );
 	}
 
@@ -349,7 +349,7 @@ function tporapdi_ensure_imports_auth_columns() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$password_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'auth_password' ) );
 	if ( null === $password_col ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN auth_password text NOT NULL DEFAULT '' AFTER auth_username", $table ) );
 	}
 }
@@ -368,7 +368,7 @@ function tporapdi_ensure_imports_featured_image_column() {
 	$featured_image_path_col = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'featured_image_source_path' ) );
 
 	if ( null === $featured_image_path_col ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN featured_image_source_path varchar(191) NOT NULL DEFAULT 'image.url' AFTER target_post_type", $table ) );
 	}
 }
@@ -411,7 +411,7 @@ function tporapdi_ensure_imports_post_status_columns() {
 				continue;
 			}
 
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- Query text is selected from a fixed whitelist of literal ALTER statements.
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Query text is selected from a fixed whitelist of literal ALTER statements.
 			$wpdb->query( $wpdb->prepare( $query, $table ) );
 		}
 	}
@@ -430,7 +430,7 @@ function tporapdi_ensure_imports_custom_meta_mappings_column() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, 'custom_meta_mappings' ) );
 	if ( null === $exists ) {
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 		$wpdb->query( $wpdb->prepare( 'ALTER TABLE %i ADD COLUMN custom_meta_mappings longtext NULL AFTER ping_status', $table ) );
 	}
 }
@@ -479,8 +479,8 @@ function tporapdi_ensure_imports_template_columns() {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, $col_name ) );
 		if ( null === $exists ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-			$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN `{$col_name}` {$col_def}", $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Column names/definitions come from a fixed literal whitelist.
+			$wpdb->query( $wpdb->prepare( "ALTER TABLE %i ADD COLUMN `{$col_name}` {$col_def}", $table ) );
 		}
 	}
 }
@@ -548,7 +548,7 @@ function tporapdi_migrate_external_id_meta_key(): void {
 		return;
 	}
 
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+	// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- One-time guarded migration of a legacy meta key.
 	$wpdb->update(
 		$wpdb->postmeta,
 		array( 'meta_key' => '_tporapdi_external_id' ),
@@ -556,6 +556,7 @@ function tporapdi_migrate_external_id_meta_key(): void {
 		array( '%s' ),
 		array( '%s' )
 	);
+	// phpcs:enable
 
 	update_option( 'tporapdi_migrated_external_id_meta_key', true, false );
 }

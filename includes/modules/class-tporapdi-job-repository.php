@@ -172,7 +172,7 @@ class Tporapdi_Job_Repository {
 		$id    = absint( $id );
 
 		if ( $id > 0 ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Cache is busted via bust_cache() after save.
 			$updated = $wpdb->update( $table, $data, array( 'id' => $id ), $formats, array( '%d' ) );
 
 			if ( false === $updated ) {
@@ -236,7 +236,7 @@ class Tporapdi_Job_Repository {
 		global $wpdb;
 		$table = self::table();
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Cache is busted via bust_cache() below.
 		$deleted = $wpdb->delete( $table, array( 'id' => $id ), array( '%d' ) );
 
 		if ( false === $deleted ) {

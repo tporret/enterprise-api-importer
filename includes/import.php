@@ -15,7 +15,7 @@ add_action( 'tporapdi_process_import_queue', 'tporapdi_handle_scheduled_import_b
 add_action( 'tporapdi_immediate_import_trigger', 'tporapdi_handle_import_batch_hook', 10, 2 );
 add_action( 'tporapdi_recurring_import_trigger', 'tporapdi_handle_import_batch_hook', 10, 2 );
 add_action( 'tporapdi_daily_garbage_collection', array( 'TPORAPDI_Import_Processor', 'run_garbage_collection' ) );
-add_filter( 'cron_schedules', 'tporapdi_register_custom_cron_schedules' );
+add_filter( 'cron_schedules', 'tporapdi_register_custom_cron_schedules' ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- Interval is user-configured and validated on save.
 
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
 	WP_CLI::add_command( 'eai garbage-collect', 'tporapdi_wp_cli_run_garbage_collection' );
@@ -75,10 +75,6 @@ function tporapdi_register_custom_cron_schedules( $schedules ) {
 	foreach ( $rows as $minutes_value ) {
 		$minutes = max( 1, absint( $minutes_value ) );
 
-		if ( $minutes <= 0 ) {
-			continue;
-		}
-
 		$key = 'tporapdi_every_' . $minutes . '_minutes';
 
 		if ( isset( $schedules[ $key ] ) ) {
@@ -114,11 +110,7 @@ function tporapdi_get_recurrence_schedule_slug( $recurrence, $custom_interval_mi
 	}
 
 	if ( 'custom' === $recurrence ) {
-		$minutes = max( 1, absint( $custom_interval_minutes ) );
-
-		if ( $minutes > 0 ) {
-			return 'tporapdi_every_' . $minutes . '_minutes';
-		}
+		return 'tporapdi_every_' . max( 1, absint( $custom_interval_minutes ) ) . '_minutes';
 	}
 
 	return '';
@@ -300,10 +292,12 @@ function tporapdi_get_remote_request_args( $auth_method = 'none', $token = '', $
 	}
 
 	$args = array(
-		'timeout'            => max( 1, (int) $timeout ),
-		'redirection'        => 3,
-		'headers'            => $headers,
-		'reject_unsafe_urls' => true,
+		'timeout'             => max( 1, (int) $timeout ),
+		'redirection'         => 3,
+		'headers'             => $headers,
+		'reject_unsafe_urls'  => true,
+		// ponytail: 10 MB cap stops a hostile/misconfigured endpoint from exhausting memory; raise via the filter below if a feed legitimately exceeds it.
+		'limit_response_size' => 10 * MB_IN_BYTES,
 	);
 
 	return apply_filters( 'tporapdi_remote_request_args', $args, $auth_method );
@@ -391,7 +385,10 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
 			return new WP_Error( 'tporapdi_empty_response', __( 'API returned an empty response body.', 'tporret-api-data-importer' ) );
 		}
 
-		set_transient( $cache_key, $cached_payload, 5 * MINUTE_IN_SECONDS );
+		// ponytail: skip caching payloads over 1MB — they bloat wp_options and can exceed max_allowed_packet.
+		if ( strlen( $cached_payload ) <= MB_IN_BYTES ) {
+			set_transient( $cache_key, $cached_payload, 5 * MINUTE_IN_SECONDS );
+		}
 	} else {
 		$used_cache  = true;
 		$status_code = 200;
@@ -891,41 +888,35 @@ function tporapdi_resolve_json_array_path( $decoded_json, $path ) {
 /**
  * Transforms and loads a single API record into the configured post type.
  *
- * @param array<string, mixed> $item Single API record.
- *
- * @param string               $mapping_template Mapping template for this import job.
- * @param string               $title_template   Optional title template for this import job.
- * @param string               $target_post_type          Target post type for this import job.
- * @param string               $unique_id_path            Unique identifier path. Defaults to id.
- * @param int                  $import_id                 Import job ID.
- * @param string               $featured_image_source_path Dot-notation item path for featured image URL.
- * @param int                  $post_author               WordPress user ID to assign as post author. 0 = default.
- * @param string               $post_status               WordPress post status for new items. Default 'draft'.
- * @param string               $comment_status            Comment status for new items. Default 'closed'.
- * @param string               $ping_status               Ping status for new items. Default 'closed'.
- * @param array                $custom_meta_mappings      Array of {key, value} custom meta mappings. Default empty.
- * @param array<string, int>   $existing_post_ids         Map of external IDs to existing post IDs.
- * @param string               $excerpt_template          Optional excerpt template for this import job.
- * @param string               $post_name_template        Optional slug template for this import job.
- * @param array                $parent_mapping            Parent resolution mapping config.
- * @param array                $media_mappings            Media mapping config.
+ * @param array<string, mixed> $item              Single API record.
+ * @param array<string, mixed> $config            Processing config as built by
+ *                                                TPORAPDI_Import_Runner::get_processing_stage_config().
+ * @param int                  $import_id         Import job ID.
+ * @param array<string, int>   $existing_post_ids Map of external IDs to existing post IDs.
  *
  * @return array<string, mixed>|WP_Error
  */
-function tporapdi_transform_and_load_item( $item, $mapping_template, $title_template = '', $target_post_type = 'post', $unique_id_path = 'id', $import_id = 0, $featured_image_source_path = 'image.url', $post_author = 0, $post_status = 'draft', $comment_status = 'closed', $ping_status = 'closed', $custom_meta_mappings = array(), $existing_post_ids = array(), $excerpt_template = '', $post_name_template = '', $parent_mapping = array(), $media_mappings = array() ) {
+function tporapdi_transform_and_load_item( $item, array $config, $import_id = 0, $existing_post_ids = array() ) {
 	if ( ! is_array( $item ) ) {
 		return new WP_Error( 'tporapdi_invalid_item', __( 'Transform input must be an array.', 'tporret-api-data-importer' ) );
 	}
 
-	$mapping_template           = (string) $mapping_template;
-	$title_template             = trim( (string) $title_template );
-	$excerpt_template           = trim( (string) $excerpt_template );
-	$post_name_template         = trim( (string) $post_name_template );
-	$target_post_type           = sanitize_key( (string) $target_post_type );
-	$unique_id_path             = trim( (string) $unique_id_path );
+	$mapping_template           = (string) ( $config['mapping_template'] ?? '' );
+	$title_template             = trim( (string) ( $config['title_template'] ?? '' ) );
+	$excerpt_template           = trim( (string) ( $config['excerpt_template'] ?? '' ) );
+	$post_name_template         = trim( (string) ( $config['post_name_template'] ?? '' ) );
+	$target_post_type           = sanitize_key( (string) ( $config['target_post_type'] ?? 'post' ) );
+	$unique_id_path             = trim( (string) ( $config['unique_id_path'] ?? 'id' ) );
 	$import_id                  = absint( $import_id );
-	$featured_image_source_path = trim( (string) $featured_image_source_path );
-	$post_author                = absint( $post_author );
+	$featured_image_source_path = trim( (string) ( $config['featured_image_source_path'] ?? 'image.url' ) );
+	$post_author                = absint( $config['post_author'] ?? 0 );
+	$post_status                = (string) ( $config['post_status'] ?? 'draft' );
+	$comment_status             = (string) ( $config['comment_status'] ?? 'closed' );
+	$ping_status                = (string) ( $config['ping_status'] ?? 'closed' );
+	$custom_meta_mappings       = is_array( $config['custom_meta_mappings'] ?? null ) ? $config['custom_meta_mappings'] : array();
+	$parent_mapping             = is_array( $config['parent_mapping'] ?? null ) ? $config['parent_mapping'] : array();
+	$media_mappings             = is_array( $config['media_mappings'] ?? null ) ? $config['media_mappings'] : array();
+	$existing_post_ids          = is_array( $existing_post_ids ) ? $existing_post_ids : array();
 
 	$normalized     = TPORAPDI_Defaults_Resolver::normalize( $target_post_type, compact( 'post_status', 'comment_status', 'ping_status' ) );
 	$post_status    = $normalized['post_status'];
@@ -1036,7 +1027,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 
 	$existing_post_id = 0;
 
-	if ( is_array( $existing_post_ids ) && isset( $existing_post_ids[ $external_id ] ) ) {
+	if ( isset( $existing_post_ids[ $external_id ] ) ) {
 		$existing_post_id = absint( $existing_post_ids[ $external_id ] );
 	}
 
@@ -1051,7 +1042,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 				'no_found_rows'          => true,
 				'update_post_meta_cache' => false,
 				'update_post_term_cache' => false,
-				'meta_query'             => array(
+				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Lookup by external id, bounded to 1 post.
 					array(
 						'key'     => '_tporapdi_external_id',
 						'value'   => $external_id,
@@ -1124,7 +1115,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 			}
 		}
 
-		if ( ! empty( $media_mappings ) && is_array( $media_mappings ) ) {
+		if ( ! empty( $media_mappings ) ) {
 			Tporapdi_Media_Ingestor::apply_media_mappings( $item, $insert_post_id, $import_id, $media_mappings );
 		} else {
 			tporapdi_assign_featured_image_from_item( $item, $insert_post_id, $import_id, $featured_image_source_path );
@@ -1149,7 +1140,7 @@ function tporapdi_transform_and_load_item( $item, $mapping_template, $title_temp
 		return new WP_Error( 'tporapdi_existing_post_not_found', __( 'Existing imported item post could not be loaded.', 'tporret-api-data-importer' ) );
 	}
 
-	$featured_image_updated = ! empty( $media_mappings ) && is_array( $media_mappings )
+	$featured_image_updated = ! empty( $media_mappings )
 		? Tporapdi_Media_Ingestor::apply_media_mappings( $item, $existing_post_id, $import_id, $media_mappings )
 		: tporapdi_assign_featured_image_from_item( $item, $existing_post_id, $import_id, $featured_image_source_path );
 
@@ -1993,11 +1984,12 @@ function tporapdi_assign_featured_image_from_item( $item, $post_id, $import_id =
 function tporapdi_kses_mapping_template( $template, $allowed_html ) {
 	$template    = (string) $template;
 	$twig_blocks = array();
+	$marker      = 'TWIGEAIBLOCK' . uniqid() . 'N'; // Unique per call so literal template text can never collide.
 
 	$template = preg_replace_callback(
 		'/\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}/s',
-		static function ( $matches ) use ( &$twig_blocks ) {
-			$key                 = 'TWIGEAIBLOCK' . count( $twig_blocks ) . 'X';
+		static function ( $matches ) use ( &$twig_blocks, $marker ) {
+			$key                 = $marker . count( $twig_blocks ) . 'X';
 			$twig_blocks[ $key ] = $matches[0];
 			return $key;
 		},

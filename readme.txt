@@ -212,13 +212,6 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 
 == Changelog ==
 
-= 1.5.0 =
-* Added CSV/TSV (`csv`) payload extraction support across endpoint testing, preview, dry-run, and import runtime.
-* Added XML/RSS (`xml`) payload extraction support with configurable repeating-node selection.
-* Added import-job persistence and schema migrations for `csv_delimiter` and `xml_node_element` settings.
-* Added streamed staging for CSV/XML extraction to reduce memory pressure on large payload imports.
-* Added dedicated CSV and XML parser modules with delimiter auto-detection and nested XML node normalization.
-
 = 1.4.0 =
 * Added per-import Payload Format selection with support for JSON and iCal (.ics) feeds.
 * Added iCal parsing and recurrence expansion with normalized event fields (`uid`, `instance_uid`, start/end dates, all-day flag).
@@ -343,9 +336,6 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
-= 1.5.0 =
-Adds CSV/TSV and XML/RSS payload support with new per-job extraction settings (`CSV Delimiter` and `XML Node Element`). Existing imports keep their current behavior.
-
 = 1.4.0 =
 Adds JSON/iCal payload format selection and iCal recurrence expansion. Existing imports continue to default to JSON.
 

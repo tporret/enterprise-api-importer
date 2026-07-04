@@ -132,25 +132,7 @@ class TPORAPDI_Import_Runner {
 	 * @return array<string, mixed>|WP_Error
 	 */
 	public function process_chunk_item( array $item, array $processing_config, int $import_id, array $existing_post_ids ) {
-		return tporapdi_transform_and_load_item(
-			$item,
-			(string) $processing_config['mapping_template'],
-			(string) $processing_config['title_template'],
-			(string) $processing_config['target_post_type'],
-			(string) $processing_config['unique_id_path'],
-			$import_id,
-			(string) $processing_config['featured_image_source_path'],
-			(int) $processing_config['post_author'],
-			(string) $processing_config['post_status'],
-			(string) $processing_config['comment_status'],
-			(string) $processing_config['ping_status'],
-			is_array( $processing_config['custom_meta_mappings'] ) ? $processing_config['custom_meta_mappings'] : array(),
-			$existing_post_ids,
-			(string) $processing_config['excerpt_template'],
-			(string) $processing_config['post_name_template'],
-			is_array( $processing_config['parent_mapping'] ) ? $processing_config['parent_mapping'] : array(),
-			is_array( $processing_config['media_mappings'] ) ? $processing_config['media_mappings'] : array()
-		);
+		return tporapdi_transform_and_load_item( $item, $processing_config, $import_id, $existing_post_ids );
 	}
 
 	/**
@@ -204,10 +186,6 @@ class TPORAPDI_Import_Runner {
 			} elseif ( isset( $item_result['action'] ) && 'updated' === $item_result['action'] ) {
 				++$result['rows_updated'];
 			}
-		}
-
-		if ( ! $result['timed_out'] && ! empty( $processing_config['parent_mapping'] ) ) {
-			tporapdi_reconcile_pending_parent_mappings( $row_import_id, (string) $processing_config['target_post_type'] );
 		}
 
 		return $result;
@@ -857,6 +835,11 @@ class TPORAPDI_Import_Runner {
 		$target_post_type = is_array( $import_job ) && ! empty( $import_job['target_post_type'] )
 			? sanitize_key( (string) $import_job['target_post_type'] )
 			: 'post';
+
+		// ponytail: reconcile once per run, not per chunk — every parent exists by now anyway.
+		if ( is_array( $import_job ) && ! empty( $import_job['parent_mapping'] ) ) {
+			tporapdi_reconcile_pending_parent_mappings( $import_id, $target_post_type );
+		}
 
 		$orphans_trashed = tporapdi_trash_orphaned_imported_posts( (int) $state['start_timestamp'], $import_id, $target_post_type );
 
