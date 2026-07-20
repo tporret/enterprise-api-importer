@@ -85,13 +85,19 @@ class TPORAPDI_CSV_Parser {
 				continue;
 			}
 
+			++$row_count;
+
 			$callback_result = $callback( self::combine_row( $headers, $row ) );
 			if ( is_wp_error( $callback_result ) ) {
 				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- php://temp stream is used for fgetcsv parsing, not filesystem access.
 				return $callback_result;
 			}
 
-			++$row_count;
+			if ( false === $callback_result ) {
+				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- php://temp stream is used for fgetcsv parsing, not filesystem access.
+				return array( 'row_count' => $row_count );
+			}
+
 			$row = fgetcsv( $handle, 0, $delimiter );
 		}
 

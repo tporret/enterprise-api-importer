@@ -208,36 +208,8 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 	$csv_delimiter    = isset( $data_filters['csv_delimiter'] ) ? sanitize_key( (string) $data_filters['csv_delimiter'] ) : '';
 	$xml_node_element = isset( $data_filters['xml_node_element'] ) ? sanitize_text_field( (string) $data_filters['xml_node_element'] ) : '';
 
-	$title_template       = mb_substr( trim( sanitize_text_field( $title_template ) ), 0, 255 );
-	$allowed_mapping_html = array(
-		'h1'      => array( 'class' => true ),
-		'h2'      => array( 'class' => true ),
-		'h3'      => array( 'class' => true ),
-		'h4'      => array( 'class' => true ),
-		'h5'      => array( 'class' => true ),
-		'h6'      => array( 'class' => true ),
-		'p'       => array( 'class' => true ),
-		'br'      => array(),
-		'strong'  => array( 'class' => true ),
-		'em'      => array( 'class' => true ),
-		'ul'      => array( 'class' => true ),
-		'ol'      => array( 'class' => true ),
-		'li'      => array( 'class' => true ),
-		'article' => array( 'class' => true ),
-		'header'  => array( 'class' => true ),
-		'section' => array( 'class' => true ),
-		'footer'  => array( 'class' => true ),
-		'div'     => array( 'class' => true ),
-		'span'    => array( 'class' => true ),
-		'a'       => array(
-			'href'   => true,
-			'title'  => true,
-			'target' => true,
-			'rel'    => true,
-			'class'  => true,
-		),
-	);
-	$body_template        = tporapdi_kses_mapping_template( $body_template, $allowed_mapping_html );
+	$title_template = mb_substr( trim( sanitize_text_field( $title_template ) ), 0, 255 );
+	$body_template  = tporapdi_kses_mapping_template( $body_template, tporapdi_get_allowed_mapping_html() );
 
 	$title_template_validation = tporapdi_validate_twig_template_security( $title_template, 'title' );
 	if ( is_wp_error( $title_template_validation ) ) {
@@ -303,9 +275,11 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 		);
 	}
 
-	$raw_body   = (string) wp_remote_retrieve_body( $response );
-	$array_path = isset( $data_filters['array_path'] ) ? sanitize_text_field( (string) $data_filters['array_path'] ) : '';
-	$records    = tporapdi_extract_records_from_payload( $raw_body, $data_format, $array_path, $xml_node_element, $csv_delimiter );
+	$raw_body       = (string) wp_remote_retrieve_body( $response );
+	$array_path     = isset( $data_filters['array_path'] ) ? sanitize_text_field( (string) $data_filters['array_path'] ) : '';
+	$incoming_rules = isset( $data_filters['rules'] ) && is_array( $data_filters['rules'] ) ? $data_filters['rules'] : array();
+	$filter_rules   = tporapdi_decode_filter_rules_json( wp_json_encode( $incoming_rules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+	$records        = tporapdi_extract_preview_records_from_payload( $raw_body, $data_format, $array_path, $xml_node_element, $csv_delimiter, $filter_rules, 1 );
 
 	if ( is_wp_error( $records ) ) {
 		return new WP_REST_Response(
@@ -317,16 +291,9 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
 		);
 	}
 
-	$incoming_rules = isset( $data_filters['rules'] ) && is_array( $data_filters['rules'] ) ? $data_filters['rules'] : array();
-	$filter_rules   = tporapdi_decode_filter_rules_json( wp_json_encode( $incoming_rules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
-
-	if ( ! empty( $filter_rules ) ) {
-		$records = tporapdi_apply_filter_rules_to_records( is_array( $records ) ? $records : array(), $filter_rules );
-	}
-
 	$record = null;
 	if ( is_array( $records ) && ! empty( $records ) ) {
-		$record = tporapdi_array_is_list( $records ) ? $records[0] : $records;
+		$record = $records[0];
 	}
 
 	if ( ! is_array( $record ) || empty( $record ) ) {
@@ -441,24 +408,20 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 		);
 	}
 
-	$body           = (string) wp_remote_retrieve_body( $response );
-	$selected_array = tporapdi_extract_records_from_payload( $body, $data_format, $array_path, $xml_node_element, $csv_delimiter );
-	if ( is_wp_error( $selected_array ) ) {
+	$body            = (string) wp_remote_retrieve_body( $response );
+	$preview_records = tporapdi_extract_preview_records_from_payload( $body, $data_format, $array_path, $xml_node_element, $csv_delimiter, array(), 1 );
+	if ( is_wp_error( $preview_records ) ) {
 		return new WP_REST_Response(
 			array(
-				'code'    => $selected_array->get_error_code(),
-				'message' => $selected_array->get_error_message(),
+				'code'    => $preview_records->get_error_code(),
+				'message' => $preview_records->get_error_message(),
 			),
 			400
 		);
 	}
 
-	$sample_item    = null;
+	$sample_item    = ! empty( $preview_records ) ? $preview_records[0] : null;
 	$available_keys = array();
-
-	if ( is_array( $selected_array ) ) {
-		$sample_item = tporapdi_array_is_list( $selected_array ) && ! empty( $selected_array ) ? $selected_array[0] : $selected_array;
-	}
 
 	if ( is_array( $sample_item ) ) {
 		$available_keys = array_keys( $sample_item );
@@ -469,17 +432,12 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 		$sample_json = '';
 	}
 
-	$item_count = 0;
-	if ( is_array( $selected_array ) ) {
-		$item_count = tporapdi_array_is_list( $selected_array ) ? count( $selected_array ) : 1;
-	}
-
 	return new WP_REST_Response(
 		array(
 			'success'        => true,
 			'message'        => esc_html__( 'API connection successful.', 'tporret-api-data-importer' ),
 			'status_code'    => $status_code,
-			'item_count'     => $item_count,
+			'item_count'     => count( $preview_records ),
 			'available_keys' => $available_keys,
 			'sample_data'    => $sample_item,
 			'sample_json'    => $sample_json,

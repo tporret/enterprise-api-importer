@@ -253,31 +253,27 @@ class TPORAPDI_Import_Runner {
 
 		$items             = tporapdi_normalize_staged_items( $decoded_items );
 		$processing_config = $this->get_processing_stage_config( $import_job );
-		$chunks            = array_chunk( $items, 50 );
+		$chunk_result      = $this->process_chunk(
+			$items,
+			$processing_config,
+			$row_id,
+			$row_import_id,
+			$started_at_microtime,
+			$max_runtime_seconds
+		);
 
-		foreach ( $chunks as $chunk_items ) {
-			$chunk_result = $this->process_chunk(
-				$chunk_items,
-				$processing_config,
-				$row_id,
-				$row_import_id,
-				$started_at_microtime,
-				$max_runtime_seconds
-			);
+		$result['rows_processed'] += (int) $chunk_result['rows_processed'];
+		$result['rows_created']   += (int) $chunk_result['rows_created'];
+		$result['rows_updated']   += (int) $chunk_result['rows_updated'];
 
-			$result['rows_processed'] += (int) $chunk_result['rows_processed'];
-			$result['rows_created']   += (int) $chunk_result['rows_created'];
-			$result['rows_updated']   += (int) $chunk_result['rows_updated'];
+		if ( ! empty( $chunk_result['errors'] ) ) {
+			$result['errors'] = array_merge( $result['errors'], $chunk_result['errors'] );
+		}
 
-			if ( ! empty( $chunk_result['errors'] ) ) {
-				$result['errors'] = array_merge( $result['errors'], $chunk_result['errors'] );
-			}
-
-			if ( ! empty( $chunk_result['timed_out'] ) ) {
-				$result['timed_out']     = true;
-				$result['has_remaining'] = true;
-				return $result;
-			}
+		if ( ! empty( $chunk_result['timed_out'] ) ) {
+			$result['timed_out']     = true;
+			$result['has_remaining'] = true;
+			return $result;
 		}
 
 		$marked_processed = Tporapdi_Queue_Repository::mark_processed( $row_id );
@@ -490,6 +486,23 @@ class TPORAPDI_Import_Runner {
 	}
 
 	/**
+	 * Atomically acquires the active run state for one import job.
+	 *
+	 * @param array<string, mixed> $state Run state (must contain import_id).
+	 *
+	 * @return bool True when the lock was acquired.
+	 */
+	private function acquire_active_run_state( array $state ): bool {
+		$import_id = absint( $state['import_id'] ?? 0 );
+
+		if ( $import_id <= 0 ) {
+			return false;
+		}
+
+		return add_option( 'tporapdi_active_run_' . $import_id, $state, '', false );
+	}
+
+	/**
 	 * Clears the active run state for one import job.
 	 *
 	 * @param int $import_id Import job ID.
@@ -573,7 +586,9 @@ class TPORAPDI_Import_Runner {
 			return 'start';
 		}
 
-		if ( $allow_same_import_resume ) {
+		$phase = isset( $active_state['phase'] ) ? sanitize_key( (string) $active_state['phase'] ) : 'processing';
+
+		if ( $allow_same_import_resume && 'processing' === $phase ) {
 			return 'resume';
 		}
 
@@ -689,6 +704,7 @@ class TPORAPDI_Import_Runner {
 			'run_id'              => wp_generate_uuid4(),
 			'import_id'           => $import_id,
 			'trigger_source'      => $trigger_source,
+			'phase'               => 'extracting',
 			'start_timestamp'     => $started_unix,
 			'start_time'          => gmdate( 'Y-m-d H:i:s', $started_unix ),
 			'last_heartbeat'      => $started_unix,
@@ -712,9 +728,17 @@ class TPORAPDI_Import_Runner {
 	 * @return true|WP_Error
 	 */
 	private function start_extract_stage_run( int $import_id, string $trigger_source, bool $log_start_failure = false ) {
+		$state = $this->create_run_state( $import_id, $trigger_source );
+
+		if ( ! $this->acquire_active_run_state( $state ) ) {
+			return new WP_Error( 'import_running', __( 'An import is already running.', 'tporret-api-data-importer' ) );
+		}
+
 		$extract_result = tporapdi_extract_and_stage_data( $import_id );
 
 		if ( is_wp_error( $extract_result ) ) {
+			$this->clear_active_run_state( $import_id );
+
 			if ( $log_start_failure ) {
 				$this->write_failed_start_log( $import_id, $trigger_source, $extract_result );
 			}
@@ -722,7 +746,9 @@ class TPORAPDI_Import_Runner {
 			return $extract_result;
 		}
 
-		$this->set_active_run_state( $this->create_run_state( $import_id, $trigger_source ) );
+		$state['phase']          = 'processing';
+		$state['last_heartbeat'] = time();
+		$this->set_active_run_state( $state );
 		// Dispatch the first processing slice via the cron queue rather than running
 		// it inline. Inline execution means the extract caller (HTTP request or cron
 		// trigger hook) bears the processing cost and can orphan the lock if PHP is

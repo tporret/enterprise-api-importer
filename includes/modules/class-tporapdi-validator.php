@@ -103,7 +103,7 @@ class TPORAPDI_Validator {
 			return $template_check;
 		}
 
-		$mapping_template = tporapdi_kses_mapping_template( $template_raw, $this->get_allowed_mapping_html() );
+		$mapping_template = tporapdi_kses_mapping_template( $template_raw, tporapdi_get_allowed_mapping_html() );
 		if ( '' !== $mapping_template ) {
 			$mapping_check = tporapdi_validate_twig_template_security( $mapping_template, 'mapping' );
 			if ( is_wp_error( $mapping_check ) ) {
@@ -330,42 +330,6 @@ class TPORAPDI_Validator {
 		}
 
 		return true;
-	}
-
-	/**
-	 * Returns the allowed HTML map for mapping template sanitization.
-	 *
-	 * @return array<string, array<string, bool>>
-	 */
-	private function get_allowed_mapping_html(): array {
-		return array(
-			'h1'      => array( 'class' => true ),
-			'h2'      => array( 'class' => true ),
-			'h3'      => array( 'class' => true ),
-			'h4'      => array( 'class' => true ),
-			'h5'      => array( 'class' => true ),
-			'h6'      => array( 'class' => true ),
-			'p'       => array( 'class' => true ),
-			'br'      => array(),
-			'strong'  => array( 'class' => true ),
-			'em'      => array( 'class' => true ),
-			'ul'      => array( 'class' => true ),
-			'ol'      => array( 'class' => true ),
-			'li'      => array( 'class' => true ),
-			'article' => array( 'class' => true ),
-			'header'  => array( 'class' => true ),
-			'section' => array( 'class' => true ),
-			'footer'  => array( 'class' => true ),
-			'div'     => array( 'class' => true ),
-			'span'    => array( 'class' => true ),
-			'a'       => array(
-				'href'   => true,
-				'title'  => true,
-				'target' => true,
-				'rel'    => true,
-				'class'  => true,
-			),
-		);
 	}
 
 	/**

@@ -49,6 +49,28 @@ function tporapdi_db_logs_table(): string {
 }
 
 /**
+ * Returns the imported item lookup table name.
+ *
+ * @return string
+ */
+function tporapdi_db_imported_items_table(): string {
+	global $wpdb;
+
+	return $wpdb->prefix . 'tporapdi_imported_items';
+}
+
+/**
+ * Returns the media source lookup table name.
+ *
+ * @return string
+ */
+function tporapdi_db_media_sources_table(): string {
+	global $wpdb;
+
+	return $wpdb->prefix . 'tporapdi_media_sources';
+}
+
+/**
  * Returns the multisite network dashboard snapshot table name.
  *
  * @return string

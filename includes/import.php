@@ -322,13 +322,13 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
 		return $validated_endpoint;
 	}
 
-	// Auth credentials are included in the fingerprint so two jobs hitting the same
-	// endpoint URL with different tokens cannot share each other's cached responses.
-	$cache_key      = 'tporapdi_api_cache_' . md5( $endpoint . '|' . $auth_method . '|' . $token . '|' . $auth_header_name . '|' . $auth_username . '|' . $auth_password );
+	$auth_method    = sanitize_key( (string) $auth_method );
+	$cacheable      = 'none' === $auth_method && '' === trim( (string) $token ) && '' === trim( (string) $auth_username ) && '' === (string) $auth_password;
+	$cache_key      = 'tporapdi_api_cache_' . hash_hmac( 'sha256', (string) $endpoint, wp_salt( 'auth' ) );
 	$cached_payload = false;
 	$used_cache     = false;
 
-	if ( ! $bypass_cache ) {
+	if ( $cacheable && ! $bypass_cache ) {
 		$cached_payload = get_transient( $cache_key );
 	}
 
@@ -385,8 +385,8 @@ function tporapdi_fetch_api_payload( $endpoint, $auth_method = 'none', $token = 
 			return new WP_Error( 'tporapdi_empty_response', __( 'API returned an empty response body.', 'tporret-api-data-importer' ) );
 		}
 
-		// ponytail: skip caching payloads over 1MB — they bloat wp_options and can exceed max_allowed_packet.
-		if ( strlen( $cached_payload ) <= MB_IN_BYTES ) {
+		// ponytail: skip auth and >1MB payload caching; transients live in wp_options on many installs.
+		if ( $cacheable && strlen( $cached_payload ) <= MB_IN_BYTES ) {
 			set_transient( $cache_key, $cached_payload, 5 * MINUTE_IN_SECONDS );
 		}
 	} else {
@@ -454,6 +454,18 @@ function tporapdi_extract_records_from_payload( string $raw_body, string $data_f
 		return TPORAPDI_XML_Parser::parse( $raw_body, $xml_node_element );
 	}
 
+	$payload_byte_limit = tporapdi_get_json_payload_byte_limit();
+	if ( $payload_byte_limit > 0 && strlen( $raw_body ) > $payload_byte_limit ) {
+		return new WP_Error(
+			'tporapdi_json_payload_too_large',
+			sprintf(
+				/* translators: %s is a formatted file size. */
+				__( 'JSON payload is too large for non-streaming import. Keep JSON responses under %s, use paginated endpoints, or switch to CSV/XML for large feeds.', 'tporret-api-data-importer' ),
+				size_format( $payload_byte_limit )
+			)
+		);
+	}
+
 	$decoded_json = json_decode( $raw_body, true );
 
 	if ( JSON_ERROR_NONE !== json_last_error() ) {
@@ -467,7 +479,98 @@ function tporapdi_extract_records_from_payload( string $raw_body, string $data_f
 		);
 	}
 
-	return tporapdi_resolve_json_array_path( $decoded_json, $array_path );
+	$selected_array = tporapdi_resolve_json_array_path( $decoded_json, $array_path );
+	if ( is_wp_error( $selected_array ) ) {
+		return $selected_array;
+	}
+
+	$record_limit = tporapdi_get_json_record_limit();
+	if ( $record_limit > 0 && count( tporapdi_normalize_staged_items( $selected_array ) ) > $record_limit ) {
+		return new WP_Error(
+			'tporapdi_json_record_limit_exceeded',
+			sprintf(
+				/* translators: %d is the maximum supported JSON record count. */
+				__( 'JSON payload has too many records for non-streaming import. Keep JSON imports under %d records, use paginated endpoints, or switch to CSV/XML for large feeds.', 'tporret-api-data-importer' ),
+				$record_limit
+			)
+		);
+	}
+
+	return $selected_array;
+}
+
+/**
+ * Returns the maximum non-streaming JSON payload size in bytes.
+ *
+ * @return int Maximum byte size. Zero disables the cap.
+ */
+function tporapdi_get_json_payload_byte_limit(): int {
+	return max( 0, (int) apply_filters( 'tporapdi_json_payload_byte_limit', 5 * MB_IN_BYTES ) );
+}
+
+/**
+ * Returns the maximum non-streaming JSON record count.
+ *
+ * @return int Maximum record count. Zero disables the cap.
+ */
+function tporapdi_get_json_record_limit(): int {
+	return max( 0, (int) apply_filters( 'tporapdi_json_record_limit', 5000 ) );
+}
+
+/**
+ * Extracts only the first records needed for preview UI.
+ *
+ * @param string                            $raw_body         Raw remote response body.
+ * @param string                            $data_format      Payload format key.
+ * @param string                            $array_path       Dot-notation JSON array path.
+ * @param string                            $xml_node_element Repeating XML element name.
+ * @param string                            $csv_delimiter    CSV delimiter override key.
+ * @param array<int, array<string, string>> $filter_rules     Sanitized filter rules.
+ * @param int                               $limit            Maximum records to return.
+ *
+ * @return array<int, array<string, mixed>>|WP_Error
+ */
+function tporapdi_extract_preview_records_from_payload( string $raw_body, string $data_format, string $array_path, string $xml_node_element = '', string $csv_delimiter = '', array $filter_rules = array(), int $limit = 1 ) {
+	$data_format = sanitize_key( $data_format );
+	$limit       = max( 1, absint( $limit ) );
+	$records     = array();
+
+	$collect_record = static function ( array $record ) use ( &$records, $filter_rules, $limit ) {
+		if ( tporapdi_record_matches_filter_rules( $record, $filter_rules ) ) {
+			$records[] = $record;
+		}
+
+		return count( $records ) < $limit;
+	};
+
+	if ( 'csv' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_CSV_Parser' ) ) {
+			return new WP_Error( 'tporapdi_csv_parser_unavailable', __( 'CSV parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		$result = TPORAPDI_CSV_Parser::for_each_record( $raw_body, $collect_record, $csv_delimiter );
+		return is_wp_error( $result ) ? $result : $records;
+	}
+
+	if ( 'xml' === $data_format ) {
+		if ( ! class_exists( 'TPORAPDI_XML_Parser' ) ) {
+			return new WP_Error( 'tporapdi_xml_parser_unavailable', __( 'XML parser dependency is unavailable.', 'tporret-api-data-importer' ) );
+		}
+
+		$result = TPORAPDI_XML_Parser::for_each_record( $raw_body, $collect_record, $xml_node_element );
+		return is_wp_error( $result ) ? $result : $records;
+	}
+
+	$selected_array = tporapdi_extract_records_from_payload( $raw_body, $data_format, $array_path, $xml_node_element, $csv_delimiter );
+	if ( is_wp_error( $selected_array ) ) {
+		return $selected_array;
+	}
+
+	if ( ! empty( $filter_rules ) ) {
+		$selected_array = tporapdi_apply_filter_rules_to_records( $selected_array, $filter_rules );
+	}
+
+	return array_slice( tporapdi_normalize_staged_items( is_array( $selected_array ) ? $selected_array : array() ), 0, $limit );
 }
 
 /**
@@ -1032,33 +1135,10 @@ function tporapdi_transform_and_load_item( $item, array $config, $import_id = 0,
 	}
 
 	if ( 0 === $existing_post_id ) {
-		$existing_posts = get_posts(
-			array(
-				'post_type'              => $target_post_type,
-				'posts_per_page'         => 1,
-				'post_status'            => 'any',
-				'fields'                 => 'ids',
-				'ignore_sticky_posts'    => true,
-				'no_found_rows'          => true,
-				'update_post_meta_cache' => false,
-				'update_post_term_cache' => false,
-				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Lookup by external id, bounded to 1 post.
-					array(
-						'key'     => '_tporapdi_external_id',
-						'value'   => $external_id,
-						'compare' => '=',
-					),
-					array(
-						'key'     => '_tporapdi_import_id',
-						'value'   => $import_id,
-						'compare' => '=',
-					),
-				),
-			)
-		);
+		$existing_post_ids = tporapdi_get_existing_imported_post_ids_by_external_ids( array( $external_id ), $import_id );
 
-		if ( ! empty( $existing_posts ) ) {
-			$existing_post_id = (int) $existing_posts[0];
+		if ( isset( $existing_post_ids[ $external_id ] ) ) {
+			$existing_post_id = absint( $existing_post_ids[ $external_id ] );
 		}
 	}
 
@@ -1124,6 +1204,7 @@ function tporapdi_transform_and_load_item( $item, array $config, $import_id = 0,
 		update_post_meta( $insert_post_id, '_tporapdi_external_id', $external_id );
 		update_post_meta( $insert_post_id, '_tporapdi_import_id', $import_id );
 		update_post_meta( $insert_post_id, '_last_synced_timestamp', $timestamp );
+		tporapdi_upsert_imported_item_lookup( $import_id, $external_id, (int) $insert_post_id, $target_post_type );
 		tporapdi_store_parent_mapping_state( $insert_post_id, $parent_resolution );
 		tporapdi_save_item_meta_with_manifest( $insert_post_id, $item, $import_id );
 		tporapdi_apply_custom_meta_mappings( $insert_post_id, $item, $custom_meta_mappings );
@@ -1192,6 +1273,7 @@ function tporapdi_transform_and_load_item( $item, array $config, $import_id = 0,
 		}
 
 		update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+		tporapdi_upsert_imported_item_lookup( $import_id, $external_id, $existing_post_id, $target_post_type );
 		tporapdi_store_parent_mapping_state( $existing_post_id, $parent_resolution );
 		tporapdi_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 		tporapdi_apply_custom_meta_mappings( $existing_post_id, $item, $custom_meta_mappings );
@@ -1204,6 +1286,7 @@ function tporapdi_transform_and_load_item( $item, array $config, $import_id = 0,
 
 	// Touch sync timestamp even when content and title are unchanged so valid items are not treated as orphans.
 	update_post_meta( $existing_post_id, '_last_synced_timestamp', $timestamp );
+	tporapdi_upsert_imported_item_lookup( $import_id, $external_id, $existing_post_id, $target_post_type );
 	tporapdi_store_parent_mapping_state( $existing_post_id, $parent_resolution );
 	tporapdi_save_item_meta_with_manifest( $existing_post_id, $item, $import_id );
 	tporapdi_apply_custom_meta_mappings( $existing_post_id, $item, $custom_meta_mappings );
@@ -1267,9 +1350,8 @@ function tporapdi_apply_custom_meta_mappings( $post_id, $item, $mappings ) {
 /**
  * Save API item data and metadata manifest for imported posts.
  *
- * Stores the raw API item payload as a single JSON meta value and tracks
- * which fields contain array/object values. Writes `_tporapdi_raw_record`,
- * `_tporapdi_import_job_id`, `_tporapdi_manifest_array_keys`, and `_tporapdi_field_schema`.
+ * Tracks which fields contain array/object values. Raw API item payload storage
+ * is debug-only and controlled by the retain_raw_records setting.
  *
  * @param int                  $post_id   The WordPress post ID.
  * @param array<string, mixed> $item      The raw API record.
@@ -1306,12 +1388,17 @@ function tporapdi_save_item_meta_with_manifest( $post_id, $item, $import_id ) {
 		}
 	}
 
-	$raw_record = wp_json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-	if ( false === $raw_record ) {
-		$raw_record = '';
+	if ( tporapdi_should_store_raw_records() ) {
+		$raw_record = wp_json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+		if ( false === $raw_record ) {
+			$raw_record = '';
+		}
+
+		update_post_meta( $post_id, '_tporapdi_raw_record', $raw_record );
+	} else {
+		delete_post_meta( $post_id, '_tporapdi_raw_record' );
 	}
 
-	update_post_meta( $post_id, '_tporapdi_raw_record', $raw_record );
 	update_post_meta( $post_id, '_tporapdi_import_job_id', $import_id );
 	update_post_meta( $post_id, '_tporapdi_manifest_array_keys', array_unique( $tporapdi_array_keys ) );
 
@@ -1326,6 +1413,18 @@ function tporapdi_save_item_meta_with_manifest( $post_id, $item, $import_id ) {
 	if ( ! empty( $field_schema ) ) {
 		update_post_meta( $post_id, '_tporapdi_field_schema', $field_schema );
 	}
+}
+
+/**
+ * Returns whether raw API item payloads should be retained in post meta.
+ *
+ * @return bool True when debug retention is enabled.
+ */
+function tporapdi_should_store_raw_records(): bool {
+	$settings = wp_parse_args( get_option( 'tporapdi_settings', array() ), tporapdi_get_default_settings() );
+	$retain   = isset( $settings['retain_raw_records'] ) && '1' === (string) $settings['retain_raw_records'];
+
+	return (bool) apply_filters( 'tporapdi_retain_raw_records', $retain );
 }
 
 /**
@@ -1550,6 +1649,158 @@ function tporapdi_get_item_value_by_path( $item, $path ) {
 }
 
 /**
+ * Returns a stable lookup hash for a potentially long imported key.
+ *
+ * @param string $value Lookup value.
+ * @return string
+ */
+function tporapdi_hash_lookup_key( string $value ): string {
+	return hash( 'sha256', $value );
+}
+
+/**
+ * Upserts one imported item lookup row.
+ *
+ * @param int    $import_id   Import job ID.
+ * @param string $external_id External record ID.
+ * @param int    $post_id     WordPress post ID.
+ * @param string $post_type   Target post type.
+ * @return bool True on success.
+ */
+function tporapdi_upsert_imported_item_lookup( int $import_id, string $external_id, int $post_id, string $post_type = '' ): bool {
+	global $wpdb;
+
+	$import_id   = absint( $import_id );
+	$post_id     = absint( $post_id );
+	$external_id = (string) $external_id;
+	$post_type   = sanitize_key( $post_type );
+
+	if ( $import_id <= 0 || $post_id <= 0 || '' === $external_id ) {
+		return false;
+	}
+
+	if ( '' === $post_type ) {
+		$post_type = (string) get_post_type( $post_id );
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Lookup table mirrors plugin-owned postmeta for import hot paths.
+	$stored = $wpdb->replace(
+		tporapdi_db_imported_items_table(),
+		array(
+			'import_id'        => $import_id,
+			'external_id_hash' => tporapdi_hash_lookup_key( $external_id ),
+			'external_id'      => $external_id,
+			'post_id'          => $post_id,
+			'post_type'        => $post_type,
+			'updated_at'       => current_time( 'mysql', true ),
+		),
+		array( '%d', '%s', '%s', '%d', '%s', '%s' )
+	);
+
+	return false !== $stored;
+}
+
+/**
+ * Upserts one media source lookup row.
+ *
+ * @param string $source_url    Source media URL.
+ * @param int    $attachment_id Attachment post ID.
+ * @return bool True on success.
+ */
+function tporapdi_upsert_media_source_lookup( string $source_url, int $attachment_id ): bool {
+	global $wpdb;
+
+	$source_url    = esc_url_raw( $source_url );
+	$attachment_id = absint( $attachment_id );
+
+	if ( '' === $source_url || $attachment_id <= 0 ) {
+		return false;
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Lookup table mirrors plugin-owned attachment source meta for media hot paths.
+	$stored = $wpdb->replace(
+		tporapdi_db_media_sources_table(),
+		array(
+			'source_url_hash' => tporapdi_hash_lookup_key( $source_url ),
+			'source_url'      => $source_url,
+			'attachment_id'   => $attachment_id,
+			'updated_at'      => current_time( 'mysql', true ),
+		),
+		array( '%s', '%s', '%d', '%s' )
+	);
+
+	return false !== $stored;
+}
+
+/**
+ * Returns an existing attachment ID for a source URL.
+ *
+ * Falls back to legacy postmeta once, then writes the lookup row.
+ *
+ * @param string $source_url Source media URL.
+ * @return int Attachment ID or 0.
+ */
+function tporapdi_get_attachment_id_by_source_url( string $source_url ): int {
+	global $wpdb;
+
+	$source_url = esc_url_raw( $source_url );
+	if ( '' === $source_url ) {
+		return 0;
+	}
+
+	$lookup_query = $wpdb->prepare(
+		'SELECT lookup.attachment_id
+		FROM %i lookup
+		INNER JOIN %i posts ON lookup.attachment_id = posts.ID
+		WHERE lookup.source_url_hash = %s
+			AND lookup.source_url = %s
+			AND posts.post_type = %s
+		LIMIT 1',
+		tporapdi_db_media_sources_table(),
+		$wpdb->posts,
+		tporapdi_hash_lookup_key( $source_url ),
+		$source_url,
+		'attachment'
+	);
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Lookup table query is prepared above.
+	$attachment_id = absint( $wpdb->get_var( $lookup_query ) );
+
+	if ( $attachment_id > 0 ) {
+		return $attachment_id;
+	}
+
+	$existing = new WP_Query(
+		array(
+			'post_type'              => 'attachment',
+			'post_status'            => 'any',
+			'fields'                 => 'ids',
+			'posts_per_page'         => 1,
+			'no_found_rows'          => true,
+			'ignore_sticky_posts'    => true,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+			'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Legacy fallback for installs not backfilled yet.
+				array(
+					'key'     => '_tporapdi_source_url',
+					'value'   => $source_url,
+					'compare' => '=',
+				),
+			),
+		)
+	);
+
+	if ( empty( $existing->posts ) ) {
+		return 0;
+	}
+
+	$attachment_id = absint( $existing->posts[0] );
+	tporapdi_upsert_media_source_lookup( $source_url, $attachment_id );
+
+	return $attachment_id;
+}
+
+/**
  * Retrieves existing imported post IDs keyed by external record IDs.
  *
  * @param array<string> $external_ids External identifiers from the payload.
@@ -1567,7 +1818,52 @@ function tporapdi_get_existing_imported_post_ids_by_external_ids( array $externa
 		return array();
 	}
 
-	$placeholders = implode( ', ', array_fill( 0, count( $external_ids ), '%s' ) );
+	$hashes_by_external_id = array();
+	foreach ( $external_ids as $external_id ) {
+		$hashes_by_external_id[ $external_id ] = tporapdi_hash_lookup_key( $external_id );
+	}
+
+	$hashes            = array_values( array_unique( $hashes_by_external_id ) );
+	$hash_placeholders = implode( ', ', array_fill( 0, count( $hashes ), '%s' ) );
+	$lookup_query      = "
+		SELECT lookup.external_id, lookup.post_id
+		FROM %i lookup
+		INNER JOIN %i posts ON lookup.post_id = posts.ID
+		WHERE lookup.import_id = %d
+			AND lookup.external_id_hash IN ( {$hash_placeholders} )
+	";
+	$lookup_args       = array_merge(
+		array(
+			tporapdi_db_imported_items_table(),
+			$wpdb->posts,
+			$import_id,
+		),
+		$hashes
+	);
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Query text is assembled from fixed placeholders and prepared values only.
+	$lookup_prepared = $wpdb->prepare( $lookup_query, $lookup_args );
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Lookup table query is prepared above.
+	$lookup_rows = $wpdb->get_results( $lookup_prepared, ARRAY_A );
+
+	$map = array();
+	if ( is_array( $lookup_rows ) ) {
+		$requested_external_ids = array_fill_keys( $external_ids, true );
+		foreach ( $lookup_rows as $lookup_row ) {
+			$external_id = isset( $lookup_row['external_id'] ) ? (string) $lookup_row['external_id'] : '';
+			if ( isset( $requested_external_ids[ $external_id ] ) ) {
+				$map[ $external_id ] = (int) $lookup_row['post_id'];
+			}
+		}
+	}
+
+	$missing_external_ids = array_values( array_diff( $external_ids, array_keys( $map ) ) );
+	if ( empty( $missing_external_ids ) ) {
+		return $map;
+	}
+
+	$placeholders = implode( ', ', array_fill( 0, count( $missing_external_ids ), '%s' ) );
 	$query        = "
 		SELECT pm1.meta_value AS external_id, pm1.post_id
 		FROM %i pm1
@@ -1583,7 +1879,7 @@ function tporapdi_get_existing_imported_post_ids_by_external_ids( array $externa
 			$wpdb->postmeta,
 			'_tporapdi_external_id',
 		),
-		$external_ids,
+		$missing_external_ids,
 		array(
 			'_tporapdi_import_id',
 			$import_id,
@@ -1598,10 +1894,12 @@ function tporapdi_get_existing_imported_post_ids_by_external_ids( array $externa
 		return array();
 	}
 
-	$map = array();
 	foreach ( $rows as $row ) {
 		if ( isset( $row['external_id'] ) && '' !== (string) $row['external_id'] ) {
-			$map[ (string) $row['external_id'] ] = (int) $row['post_id'];
+			$external_id         = (string) $row['external_id'];
+			$post_id             = (int) $row['post_id'];
+			$map[ $external_id ] = $post_id;
+			tporapdi_upsert_imported_item_lookup( $import_id, $external_id, $post_id );
 		}
 	}
 
@@ -1740,33 +2038,19 @@ function tporapdi_find_imported_parent_post_id( string $parent_external_id, int 
 		return 0;
 	}
 
-	$parent_posts = get_posts(
-		array(
-			'post_type'              => $target_post_type,
-			'posts_per_page'         => 1,
-			'post_status'            => 'any',
-			'fields'                 => 'ids',
-			'ignore_sticky_posts'    => true,
-			'no_found_rows'          => true,
-			'update_post_meta_cache' => false,
-			'update_post_term_cache' => false,
-			'post__not_in'           => $exclude_post_id > 0 ? array( $exclude_post_id ) : array(),
-			'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Import parent lookup is scoped to import-owned postmeta.
-				array(
-					'key'     => '_tporapdi_external_id',
-					'value'   => $parent_external_id,
-					'compare' => '=',
-				),
-				array(
-					'key'     => '_tporapdi_import_id',
-					'value'   => $import_id,
-					'compare' => '=',
-				),
-			),
-		)
-	);
+	$parent_posts   = tporapdi_get_existing_imported_post_ids_by_external_ids( array( $parent_external_id ), $import_id );
+	$parent_post_id = isset( $parent_posts[ $parent_external_id ] ) ? absint( $parent_posts[ $parent_external_id ] ) : 0;
 
-	return empty( $parent_posts ) ? 0 : absint( $parent_posts[0] );
+	if ( $parent_post_id <= 0 || $parent_post_id === $exclude_post_id ) {
+		return 0;
+	}
+
+	$parent_post = get_post( $parent_post_id );
+	if ( ! $parent_post instanceof WP_Post || $target_post_type !== $parent_post->post_type ) {
+		return 0;
+	}
+
+	return $parent_post_id;
 }
 
 /**
@@ -1967,6 +2251,42 @@ function tporapdi_assign_featured_image_from_item( $item, $post_id, $import_id =
 	}
 
 	return $current_thumbnail_id !== (int) $attachment_id;
+}
+
+/**
+ * Returns the HTML allowlist shared by mapping-template save and preview paths.
+ *
+ * @return array<string, array<string, bool>>
+ */
+function tporapdi_get_allowed_mapping_html(): array {
+	return array(
+		'h1'      => array( 'class' => true ),
+		'h2'      => array( 'class' => true ),
+		'h3'      => array( 'class' => true ),
+		'h4'      => array( 'class' => true ),
+		'h5'      => array( 'class' => true ),
+		'h6'      => array( 'class' => true ),
+		'p'       => array( 'class' => true ),
+		'br'      => array(),
+		'strong'  => array( 'class' => true ),
+		'em'      => array( 'class' => true ),
+		'ul'      => array( 'class' => true ),
+		'ol'      => array( 'class' => true ),
+		'li'      => array( 'class' => true ),
+		'article' => array( 'class' => true ),
+		'header'  => array( 'class' => true ),
+		'section' => array( 'class' => true ),
+		'footer'  => array( 'class' => true ),
+		'div'     => array( 'class' => true ),
+		'span'    => array( 'class' => true ),
+		'a'       => array(
+			'href'   => true,
+			'title'  => true,
+			'target' => true,
+			'rel'    => true,
+			'class'  => true,
+		),
+	);
 }
 
 /**
@@ -2293,47 +2613,88 @@ function tporapdi_array_is_list( $input_array ) {
 function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id, $target_post_type = 'post' ) {
 	global $wpdb;
 
-	$posts_table      = $wpdb->posts;
-	$postmeta_table   = $wpdb->postmeta;
-	$import_id        = absint( $import_id );
-	$target_post_type = sanitize_key( (string) $target_post_type );
+	$posts_table          = $wpdb->posts;
+	$postmeta_table       = $wpdb->postmeta;
+	$imported_items_table = tporapdi_db_imported_items_table();
+	$import_id            = absint( $import_id );
+	$target_post_type     = sanitize_key( (string) $target_post_type );
 
 	if ( '' === $target_post_type || 'attachment' === $target_post_type ) {
 		$target_post_type = 'post';
 	}
 
 	$orphan_limit = max( 1, (int) apply_filters( 'tporapdi_orphan_trash_limit', 500 ) );
-
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-	$orphan_ids = $wpdb->get_col(
-		$wpdb->prepare(
-			"SELECT DISTINCT p.ID
-			FROM %i p
-			LEFT JOIN %i pm
-				ON p.ID = pm.post_id
-				AND pm.meta_key = %s
-			INNER JOIN %i pim
-				ON p.ID = pim.post_id
-				AND pim.meta_key = %s
-				AND CAST(pim.meta_value AS UNSIGNED) = %d
-			WHERE p.post_type = %s
-				AND p.post_status NOT IN ('trash', 'auto-draft')
-				AND (
-					pm.meta_value IS NULL
-					OR CAST(pm.meta_value AS UNSIGNED) < %d
-				)
-			LIMIT %d",
-			$posts_table,
-			$postmeta_table,
-			'_last_synced_timestamp',
-			$postmeta_table,
-			'_tporapdi_import_id',
-			$import_id,
-			$target_post_type,
-			$run_started_unix,
-			$orphan_limit
+	$lookup_count = absint(
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Lightweight existence check before choosing lookup-table cleanup path.
+		$wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(1) FROM %i WHERE import_id = %d',
+				$imported_items_table,
+				$import_id
+			)
 		)
 	);
+
+	if ( $lookup_count > 0 ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$orphan_ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT DISTINCT posts.ID
+				FROM %i lookup
+				INNER JOIN %i posts ON lookup.post_id = posts.ID
+				LEFT JOIN %i synced_meta
+					ON posts.ID = synced_meta.post_id
+					AND synced_meta.meta_key = %s
+				WHERE lookup.import_id = %d
+					AND posts.post_type = %s
+					AND posts.post_status NOT IN ('trash', 'auto-draft')
+					AND (
+						synced_meta.meta_value IS NULL
+						OR CAST(synced_meta.meta_value AS UNSIGNED) < %d
+					)
+				LIMIT %d",
+				$imported_items_table,
+				$posts_table,
+				$postmeta_table,
+				'_last_synced_timestamp',
+				$import_id,
+				$target_post_type,
+				$run_started_unix,
+				$orphan_limit
+			)
+		);
+	} else {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$orphan_ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT DISTINCT p.ID
+				FROM %i p
+				LEFT JOIN %i pm
+					ON p.ID = pm.post_id
+					AND pm.meta_key = %s
+				INNER JOIN %i pim
+					ON p.ID = pim.post_id
+					AND pim.meta_key = %s
+					AND CAST(pim.meta_value AS UNSIGNED) = %d
+				WHERE p.post_type = %s
+					AND p.post_status NOT IN ('trash', 'auto-draft')
+					AND (
+						pm.meta_value IS NULL
+						OR CAST(pm.meta_value AS UNSIGNED) < %d
+					)
+				LIMIT %d",
+				$posts_table,
+				$postmeta_table,
+				'_last_synced_timestamp',
+				$postmeta_table,
+				'_tporapdi_import_id',
+				$import_id,
+				$target_post_type,
+				$run_started_unix,
+				$orphan_limit
+			)
+		);
+	}
 
 	if ( ! is_array( $orphan_ids ) ) {
 		return new WP_Error( 'tporapdi_orphan_query_failed', __( 'Failed to query orphaned imported items.', 'tporret-api-data-importer' ) );
@@ -2367,12 +2728,32 @@ function tporapdi_trash_orphaned_imported_posts( $run_started_unix, $import_id, 
 function tporapdi_get_imported_post_ids_for_job( $import_id ) {
 	global $wpdb;
 
-	$import_id      = absint( $import_id );
-	$postmeta_table = $wpdb->postmeta;
-	$posts_table    = $wpdb->posts;
+	$import_id            = absint( $import_id );
+	$imported_items_table = tporapdi_db_imported_items_table();
+	$postmeta_table       = $wpdb->postmeta;
+	$posts_table          = $wpdb->posts;
 
 	if ( $import_id <= 0 ) {
 		return array();
+	}
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$lookup_post_ids = $wpdb->get_col(
+		$wpdb->prepare(
+			'SELECT DISTINCT posts.ID
+			FROM %i lookup
+			INNER JOIN %i posts ON lookup.post_id = posts.ID
+			WHERE lookup.import_id = %d
+				AND posts.post_type <> %s',
+			$imported_items_table,
+			$posts_table,
+			$import_id,
+			'attachment'
+		)
+	);
+
+	if ( is_array( $lookup_post_ids ) && ! empty( $lookup_post_ids ) ) {
+		return array_map( 'absint', $lookup_post_ids );
 	}
 
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching

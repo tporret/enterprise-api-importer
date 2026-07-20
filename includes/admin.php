@@ -173,6 +173,7 @@ function tporapdi_render_settings_page() {
 	$hosts          = isset( $settings['allowed_endpoint_hosts'] ) ? (string) $settings['allowed_endpoint_hosts'] : '';
 	$cidrs          = isset( $settings['allowed_endpoint_cidrs'] ) ? (string) $settings['allowed_endpoint_cidrs'] : '';
 	$allow_internal = isset( $settings['allow_internal_endpoints'] ) ? (string) $settings['allow_internal_endpoints'] : '0';
+	$retain_raw     = isset( $settings['retain_raw_records'] ) ? (string) $settings['retain_raw_records'] : '0';
 	?>
 	<div class="wrap">
 		<h1><?php esc_html_e( 'tporret API Data Importer Settings', 'tporret-api-data-importer' ); ?></h1>
@@ -241,6 +242,25 @@ function tporapdi_render_settings_page() {
 							</p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row">
+							<?php esc_html_e( 'Retain Raw API Records', 'tporret-api-data-importer' ); ?>
+						</th>
+						<td>
+							<label>
+								<input
+									type="checkbox"
+									name="retain_raw_records"
+									value="1"
+									<?php checked( '1' === $retain_raw, true ); ?>
+								/>
+								<?php esc_html_e( 'Store raw API records in post meta for debugging.', 'tporret-api-data-importer' ); ?>
+							</label>
+							<p class="description">
+								<?php esc_html_e( 'Leave unchecked for production. Disabling this purges stored raw records.', 'tporret-api-data-importer' ); ?>
+							</p>
+						</td>
+					</tr>
 				</tbody>
 			</table>
 
@@ -277,6 +297,8 @@ function tporapdi_handle_save_settings() {
 	$allowed_endpoint_cidrs = isset( $_POST['allowed_endpoint_cidrs'] ) ? sanitize_textarea_field( (string) wp_unslash( $_POST['allowed_endpoint_cidrs'] ) ) : '';
 	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Reduced to a strict 1/0 toggle immediately after unslashing.
 	$allow_internal_endpoints = isset( $_POST['allow_internal_endpoints'] ) && '1' === (string) wp_unslash( $_POST['allow_internal_endpoints'] ) ? '1' : '0';
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Reduced to a strict 1/0 toggle immediately after unslashing.
+	$retain_raw_records = isset( $_POST['retain_raw_records'] ) && '1' === (string) wp_unslash( $_POST['retain_raw_records'] ) ? '1' : '0';
 
 	$current_settings = get_option( 'tporapdi_settings', array() );
 	$current_settings = is_array( $current_settings ) ? $current_settings : array();
@@ -289,8 +311,13 @@ function tporapdi_handle_save_settings() {
 	$settings['allowed_endpoint_hosts']   = $allowed_endpoint_hosts;
 	$settings['allowed_endpoint_cidrs']   = $allowed_endpoint_cidrs;
 	$settings['allow_internal_endpoints'] = $allow_internal_endpoints;
+	$settings['retain_raw_records']       = $retain_raw_records;
 
 	$updated = update_option( 'tporapdi_settings', $settings );
+
+	if ( '1' !== $retain_raw_records ) {
+		delete_post_meta_by_key( '_tporapdi_raw_record' );
+	}
 
 	$redirect_url = add_query_arg(
 		array(
@@ -1466,9 +1493,9 @@ function tporapdi_handle_test_import_endpoint() {
 		exit;
 	}
 
-	$selected_payload = tporapdi_extract_records_from_payload( (string) $response['body'], $data_format, $json_path, $xml_node_element, $csv_delimiter );
-	if ( is_wp_error( $selected_payload ) ) {
-		$preview_result['message'] = $selected_payload->get_error_message();
+	$preview_records = tporapdi_extract_preview_records_from_payload( (string) $response['body'], $data_format, $json_path, $xml_node_element, $csv_delimiter, array(), 'mapping' === $preview_mode ? 3 : 1 );
+	if ( is_wp_error( $preview_records ) ) {
+		$preview_result['message'] = $preview_records->get_error_message();
 		set_transient( $result_key, $preview_result, 5 * MINUTE_IN_SECONDS );
 		wp_safe_redirect(
 			add_query_arg(
@@ -1483,10 +1510,7 @@ function tporapdi_handle_test_import_endpoint() {
 		exit;
 	}
 
-	$sample_item = null;
-	if ( is_array( $selected_payload ) ) {
-		$sample_item = tporapdi_array_is_list( $selected_payload ) && ! empty( $selected_payload ) ? $selected_payload[0] : $selected_payload;
-	}
+	$sample_item = ! empty( $preview_records ) ? $preview_records[0] : null;
 
 	$sample_json = wp_json_encode( $sample_item, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 	if ( false === $sample_json ) {
@@ -1494,10 +1518,9 @@ function tporapdi_handle_test_import_endpoint() {
 	}
 
 	$normalized_preview = array();
-	if ( 'mapping' === $preview_mode && is_array( $selected_payload ) ) {
-		$normalized_items = tporapdi_normalize_staged_items( $selected_payload );
-		$preview_items    = array_slice( $normalized_items, 0, 3 );
-		$record_number    = 0;
+	if ( 'mapping' === $preview_mode ) {
+		$preview_items = $preview_records;
+		$record_number = 0;
 		foreach ( $preview_items as $preview_item ) {
 			++$record_number;
 			$mapped_content = tporapdi_render_mapping_template_for_item( $preview_item, (string) $import_job['mapping_template'] );
@@ -1520,8 +1543,8 @@ function tporapdi_handle_test_import_endpoint() {
 		'http_code'          => isset( $response['status_code'] ) ? (int) $response['status_code'] : 0,
 		'used_cache'         => ! empty( $response['used_cache'] ),
 		'json_path'          => $json_path,
-		'payload_type'       => gettype( $selected_payload ),
-		'item_count'         => is_array( $selected_payload ) ? count( $selected_payload ) : 0,
+		'payload_type'       => gettype( $sample_item ),
+		'item_count'         => count( $preview_records ),
 		'sample_keys'        => is_array( $sample_item ) ? array_keys( $sample_item ) : array(),
 		'sample_json'        => substr( (string) $sample_json, 0, 6000 ),
 		'preview_mode'       => $preview_mode,

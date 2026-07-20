@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'TPORAPDI_DB_SCHEMA_VERSION' ) ) {
-	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260626-2' );
+	define( 'TPORAPDI_DB_SCHEMA_VERSION', '20260719-1' );
 }
 
 if ( ! defined( 'TPORAPDI_NETWORK_DB_SCHEMA_VERSION' ) ) {
@@ -140,6 +140,8 @@ function tporapdi_activate_plugin( $network_wide = false ) {
 	dbDelta( $sql_imports );
 	dbDelta( $sql_logs );
 	dbDelta( $sql_temp );
+	tporapdi_create_lookup_tables();
+	tporapdi_backfill_lookup_tables();
 	tporapdi_ensure_imports_data_format_column();
 	tporapdi_ensure_imports_csv_delimiter_column();
 	tporapdi_ensure_imports_xml_node_element_column();
@@ -231,6 +233,106 @@ function tporapdi_maybe_upgrade_network_schema() {
 	}
 
 	tporapdi_activate_network_dashboard_storage();
+}
+
+/**
+ * Creates lookup tables for imported posts and ingested media.
+ *
+ * @return void
+ */
+function tporapdi_create_lookup_tables(): void {
+	global $wpdb;
+
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+	$charset_collate      = $wpdb->get_charset_collate();
+	$imported_items_table = tporapdi_db_imported_items_table();
+	$media_sources_table  = tporapdi_db_media_sources_table();
+
+	$sql_imported_items = "CREATE TABLE {$imported_items_table} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		import_id bigint(20) unsigned NOT NULL DEFAULT 0,
+		external_id_hash char(64) NOT NULL,
+		external_id longtext NOT NULL,
+		post_id bigint(20) unsigned NOT NULL DEFAULT 0,
+		post_type varchar(100) NOT NULL DEFAULT '',
+		updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY  (id),
+		UNIQUE KEY import_external_id (import_id, external_id_hash),
+		KEY post_id (post_id),
+		KEY import_post (import_id, post_id)
+	) {$charset_collate};";
+
+	$sql_media_sources = "CREATE TABLE {$media_sources_table} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		source_url_hash char(64) NOT NULL,
+		source_url text NOT NULL,
+		attachment_id bigint(20) unsigned NOT NULL DEFAULT 0,
+		updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY  (id),
+		UNIQUE KEY source_url_hash (source_url_hash),
+		KEY attachment_id (attachment_id)
+	) {$charset_collate};";
+
+	dbDelta( $sql_imported_items );
+	dbDelta( $sql_media_sources );
+}
+
+/**
+ * Backfills lookup tables from legacy postmeta ownership records.
+ *
+ * @return void
+ */
+function tporapdi_backfill_lookup_tables(): void {
+	global $wpdb;
+
+	$imported_items_table = tporapdi_db_imported_items_table();
+	$media_sources_table  = tporapdi_db_media_sources_table();
+
+	$imported_items_query = $wpdb->prepare(
+		'INSERT INTO %i (import_id, external_id_hash, external_id, post_id, post_type, updated_at)
+		SELECT CAST(import_meta.meta_value AS UNSIGNED), SHA2(external_meta.meta_value, 256), external_meta.meta_value, posts.ID, posts.post_type, UTC_TIMESTAMP()
+		FROM %i external_meta
+		INNER JOIN %i import_meta ON external_meta.post_id = import_meta.post_id
+		INNER JOIN %i posts ON external_meta.post_id = posts.ID
+		WHERE external_meta.meta_key = %s
+			AND external_meta.meta_value <> %s
+			AND import_meta.meta_key = %s
+			AND CAST(import_meta.meta_value AS UNSIGNED) > 0
+			AND posts.post_type <> %s
+		ON DUPLICATE KEY UPDATE post_id = VALUES(post_id), post_type = VALUES(post_type), updated_at = VALUES(updated_at)',
+		$imported_items_table,
+		$wpdb->postmeta,
+		$wpdb->postmeta,
+		$wpdb->posts,
+		'_tporapdi_external_id',
+		'',
+		'_tporapdi_import_id',
+		'attachment'
+	);
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Versioned lookup-table backfill from plugin-owned meta.
+	$wpdb->query( $imported_items_query );
+
+	$media_sources_query = $wpdb->prepare(
+		'INSERT INTO %i (source_url_hash, source_url, attachment_id, updated_at)
+		SELECT SHA2(source_meta.meta_value, 256), source_meta.meta_value, posts.ID, UTC_TIMESTAMP()
+		FROM %i source_meta
+		INNER JOIN %i posts ON source_meta.post_id = posts.ID
+		WHERE source_meta.meta_key = %s
+			AND source_meta.meta_value <> %s
+			AND posts.post_type = %s
+		ON DUPLICATE KEY UPDATE attachment_id = VALUES(attachment_id), updated_at = VALUES(updated_at)',
+		$media_sources_table,
+		$wpdb->postmeta,
+		$wpdb->posts,
+		'_tporapdi_source_url',
+		'',
+		'attachment'
+	);
+
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Versioned lookup-table backfill from plugin-owned meta.
+	$wpdb->query( $media_sources_query );
 }
 
 /**
@@ -522,6 +624,7 @@ function tporapdi_maybe_upgrade_schema() {
 	tporapdi_ensure_imports_template_columns();
 	tporapdi_migrate_external_id_meta_key();
 	tporapdi_migrate_remove_global_lock_option();
+	tporapdi_migrate_raw_record_retention();
 
 	$installed_version = (string) get_option( 'tporapdi_db_schema_version', '' );
 
@@ -577,6 +680,26 @@ function tporapdi_migrate_remove_global_lock_option(): void {
 }
 
 /**
+ * One-time migration: raw API records are debug-only and off by default.
+ *
+ * @return void
+ */
+function tporapdi_migrate_raw_record_retention(): void {
+	if ( get_option( 'tporapdi_migrated_raw_record_retention' ) ) {
+		return;
+	}
+
+	$settings = wp_parse_args( get_option( 'tporapdi_settings', array() ), tporapdi_get_default_settings() );
+	$retain   = isset( $settings['retain_raw_records'] ) && '1' === (string) $settings['retain_raw_records'];
+
+	if ( ! $retain ) {
+		delete_post_meta_by_key( '_tporapdi_raw_record' );
+	}
+
+	update_option( 'tporapdi_migrated_raw_record_retention', true, false );
+}
+
+/**
  * Returns default plugin settings.
  *
  * @return array<string, string>
@@ -588,6 +711,7 @@ function tporapdi_get_default_settings() {
 		'allow_internal_endpoints'   => '0',
 		'allowed_endpoint_hosts'     => '',
 		'allowed_endpoint_cidrs'     => '',
+		'retain_raw_records'         => '0',
 	);
 }
 

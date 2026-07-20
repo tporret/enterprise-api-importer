@@ -18,6 +18,8 @@ if ( ! $wpdb instanceof wpdb ) {
 $imports_table = $wpdb->prefix . 'tporapdi_imports';
 $logs_table    = $wpdb->prefix . 'custom_import_logs';
 $temp_table    = $wpdb->prefix . 'custom_import_temp';
+$items_table   = $wpdb->prefix . 'tporapdi_imported_items';
+$media_table   = $wpdb->prefix . 'tporapdi_media_sources';
 $network_table = $wpdb->base_prefix . 'tporapdi_network_dashboard_sites';
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -26,6 +28,10 @@ $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $imports_table ) );
 $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $logs_table ) );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $temp_table ) );
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $items_table ) );
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $media_table ) );
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
 $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $network_table ) );
 

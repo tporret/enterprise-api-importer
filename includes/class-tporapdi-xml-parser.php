@@ -91,13 +91,18 @@ class TPORAPDI_XML_Parser {
 				$record = array( 'value' => $record );
 			}
 
+			++$row_count;
+
 			$callback_result = $callback( $record );
 			if ( is_wp_error( $callback_result ) ) {
 				$reader->close();
 				return $callback_result;
 			}
 
-			++$row_count;
+			if ( false === $callback_result ) {
+				$reader->close();
+				return array( 'row_count' => $row_count );
+			}
 		}
 
 		$reader->close();

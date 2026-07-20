@@ -40,10 +40,15 @@ It gives you:
 - Configurable default target post settings per import job (status, author, comment status, ping status).
 - React-powered tabbed Import Job Workspace for add/edit flows.
 - Queue-based batch processor to avoid timeout-heavy monolithic runs.
+- Sample-only CSV/XML previews so endpoint tests do not parse full large feeds.
+- Atomic per-import run locks to prevent duplicate workers from starting the same job.
+- Lookup-table-backed imported item and media deduplication for high-volume imports.
+- Non-streaming JSON safety caps with CSV/XML streaming recommended for large feeds.
 - Per-import recurrence schedules (`off`, `hourly`, `twicedaily`, `daily`, custom N-minute intervals).
 - Health and schedule dashboard with run stats and trigger source visibility.
 - Endpoint test, API data preview, and Twig dry-run tools before production execution.
 - Per-import edit-lock toggle to allow or prevent wp-admin edits on imported posts.
+- Raw API record retention is opt-in/debug-only; production installs purge stored raw payloads by default.
 - Imported items are saved as the public `tporapdi_item` post type, so you can list them with normal WordPress archive templates or custom `WP_Query` loops.
 - The plugin does not ship a dedicated front-end block for imported-item listings; use the CPT archive or a theme/query template instead.
 
@@ -99,21 +104,19 @@ if ( $imported_items->have_posts() ) {
 }
 ```
 
-## Latest Release (1.4.0)
-
-- Added payload format selection per import job with support for `JSON` and `iCal (.ics)` sources.
-- Added an iCal parser and recurrence expansion pipeline using `sabre/vobject`, including normalized event fields such as `uid`, `instance_uid`, start/end dates, and all-day status.
-- Unified payload extraction across admin endpoint tests, REST API previews, dry-runs, and import runtime via a shared extraction function.
-- Added schema support for the new `data_format` field, including upgrade-time column creation for existing installs.
-- Updated the React import workspace to expose Payload Format, pass it through preview/dry-run requests, and apply iCal-specific guidance for unique identifiers.
-- Preserved backwards compatibility for existing JSON imports by defaulting to `json` when no format is specified.
-
-## Current Development Changes (Unreleased)
+## Latest Release (1.4.1)
 
 - Added CSV/TSV (`csv`) and XML/RSS (`xml`) payload format support to the shared extraction pipeline used by endpoint testing, preview, dry-run, and import runtime.
 - Added `csv_delimiter` and `xml_node_element` persistence/migrations for existing installs so format-specific settings remain stable across upgrades.
 - Added streaming extraction + staging for CSV/XML records to avoid materializing very large payloads in memory before queue writes.
-- Added dedicated parser modules for CSV and XML record normalization, including CSV delimiter auto-detection, XML repeating-node extraction, and format-aware unique ID guidance in the import workspace.
+- Hardened preview and runtime scalability: CSV/XML previews now stop after the needed sample records, JSON imports have filterable payload/record caps, and authenticated API responses are no longer cached.
+- Added atomic per-import run locking so concurrent cron/manual triggers cannot start duplicate extract/stage runs for the same job.
+- Added imported-item and media-source lookup tables with backfill and legacy postmeta fallback to remove hot postmeta scans from high-volume import matching and media dedupe.
+- Raw API record postmeta is now debug-only and disabled by default; disabling the setting purges `_tporapdi_raw_record` values.
+
+## Current Development Changes (Unreleased)
+
+- None.
 
 ## Multisite Operation
 
@@ -130,6 +133,8 @@ The plugin ships locked down for production-oriented installs.
 
 - HTTPS is required for remote endpoints unless you explicitly loosen that via code.
 - Private and loopback targets are blocked by default unless you opt into internal endpoints.
+- Authenticated API payloads are not stored in transients.
+- Raw API records are not retained in post meta unless explicitly enabled for debugging.
 - The SSRF Hardening reporter shows a warning on new installs until you configure an endpoint allowlist.
 - Once Allowed Endpoint Hosts or Allowed Endpoint CIDR Blocks are configured, that reporter moves to a healthy state.
 
@@ -576,10 +581,12 @@ Available settings:
 - Allowed Endpoint Hosts: exact hosts and wildcard subdomains (for example, `api.example.com`, `*.internal.example.com`).
 - Allowed Endpoint CIDR Blocks: IPv4/IPv6 ranges to constrain resolved endpoint IPs.
 - Allow Internal Endpoints: optional override to permit private/internal and loopback targets.
+- Retain Raw API Records: debug-only opt-in storage for raw source records; leave disabled in production.
 
 Recommended baseline:
 
 - Keep `Allow Internal Endpoints` disabled in production.
+- Keep `Retain Raw API Records` disabled in production.
 - Restrict `Allowed Endpoint Hosts` to trusted domains you control.
 - Use `Allowed Endpoint CIDR Blocks` only when you need explicit network-level constraints.
 
@@ -615,6 +622,14 @@ Recommended baseline:
 - **Post content**: Twig-rendered content is passed through `wp_kses_post()` before `wp_insert_post()` to prevent stored XSS from malicious API data.
 - **Custom meta values**: Twig-compiled meta values are sanitized with `sanitize_text_field()` before `update_post_meta()`.
 - **Post titles**: Rendered titles are stripped of all HTML via `wp_strip_all_tags()` and truncated to 255 characters.
+- **Raw source records**: `_tporapdi_raw_record` storage is disabled by default and purged unless explicitly enabled for debugging.
+
+### Scalability Controls
+- **CSV/XML streaming**: Runtime staging streams CSV/XML records into queue chunks instead of materializing full feeds.
+- **Sample-only previews**: CSV/XML endpoint previews stop after the requested sample rows.
+- **JSON policy**: JSON remains non-streaming and is capped by `tporapdi_json_payload_byte_limit` and `tporapdi_json_record_limit` filters.
+- **Lookup tables**: Imported-item matching and media source deduplication use dedicated lookup tables with legacy postmeta fallback.
+- **Run locks**: Per-import active-run options are acquired atomically before extract/stage work begins.
 
 ### Data Handling & Nonces
 - Input sanitization before database persistence.
@@ -642,6 +657,12 @@ Recommended baseline:
 
 - `wp_custom_import_logs`
   - run outcomes, row counts, and error details
+
+- `wp_tporapdi_imported_items`
+  - lookup rows for `(import_id, external_id)` to post ID matching
+
+- `wp_tporapdi_media_sources`
+  - lookup rows for source URL to attachment ID media deduplication
 
 ## Scheduling Model
 

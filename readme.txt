@@ -5,7 +5,7 @@ Tags: api, import, etl, ical, xml
 Requires at least: 6.3
 Tested up to: 7.0.0
 Requires PHP: 8.1
-Stable tag: 1.4.0
+Stable tag: 1.4.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
 - Per-import Default Target Settings (post status, post author, comment status, pingback/trackback status)
 - Per-import editing lock toggle for imported posts (allow editing or enforce read-only)
 - Time-aware batch processing via WP-Cron to reduce timeout and memory-risk scenarios
+- Sample-only CSV/XML previews for large feeds
+- Atomic per-import run locks to prevent duplicate runs of the same job
+- Lookup-table-backed imported item matching and media deduplication for high-volume imports
+- Filterable JSON payload and record caps; use pagination or CSV/XML for very large feeds
+- Raw API record retention is disabled by default and available only as a debug setting
 - Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site
 - **[New v1.3] Deep Module Architecture (internal):**
   - `Tporapdi_Validator` — single validation seam for all import job fields
@@ -77,6 +82,11 @@ Built for real-world production workflows:
 - Hierarchical post types can map parent relationships from API fields and reconcile out-of-order parent records
 - Media mappings can sideload featured, gallery, and meta attachments while preserving legacy featured image fallback behavior
 - Imports are staged and processed in queue batches for safer long-running jobs
+- CSV/XML feeds stream into staging chunks, and previews stop after the sample records needed by the UI
+- JSON feeds are intentionally non-streaming and protected by payload/record limits
+- Imported-item matching and media source dedupe use dedicated lookup tables with legacy postmeta fallback
+- Authenticated API responses are not cached in transients
+- Raw API records are purged unless retention is explicitly enabled for debugging
 - Imported items are cryptographically linked to their origin import (read-only)
 - Template configuration changes are audit-logged with full actor context
 - Endpoints validated against configurable SSRF allowlists and HTTPS enforcement
@@ -112,6 +122,9 @@ Yes. Set Payload Format to iCal (.ics) and the importer will expand recurring ev
 
 = Can I import CSV/TSV or XML/RSS feeds? =
 Yes. Set Payload Format to CSV/TSV or XML/RSS. CSV supports delimiter auto-detection (or manual override), and XML/RSS uses a configurable repeating node element (for example, `item` or `entry`).
+
+= How should I handle very large JSON feeds? =
+Use pagination where possible. JSON imports are non-streaming and protected by filterable payload and record limits. For very large feeds, CSV/XML streaming is the safer path.
 
 = Does it handle API authentication? =
 Yes. It supports four modes per import job: none, bearer token, custom API-key header, and basic auth.
@@ -195,7 +208,10 @@ Yes, but not recommended for production. Go to Settings → Allow Internal Endpo
 The SSRF Hardening check starts in a warning state until you configure Allowed Endpoint Hosts or Allowed Endpoint CIDR Blocks. That warning is there to remind you that outbound API access is still open until you add an allowlist.
 
 = What should I configure in tporret API Data Importer → Settings first? =
-Start with Allowed Endpoint Hosts and list only trusted API domains. Leave Allow Internal Endpoints disabled unless you intentionally import from internal services. Add CIDR blocks only when you need additional IP-range restrictions.
+Start with Allowed Endpoint Hosts and list only trusted API domains. Leave Allow Internal Endpoints and Retain Raw API Records disabled unless you intentionally need them. Add CIDR blocks only when you need additional IP-range restrictions.
+
+= Are raw API records stored in post meta? =
+No, not by default. Raw record retention is debug-only and disabled by default. Enabling it stores `_tporapdi_raw_record`; disabling it purges stored raw records.
 
 = Where are template changes logged? =
 All template configuration changes are logged to the wp_custom_import_logs database table with before/after hashes, actor information, and precise timestamps. Review logs via tporret API Data Importer → Manage Imports → Import edit screen.
@@ -211,6 +227,14 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 3. API Connection and Data Filtering rules.
 
 == Changelog ==
+
+= 1.4.1 =
+* Hardened preview scalability: CSV/XML previews stop after the requested sample records instead of parsing whole feeds.
+* Hardened API response caching: authenticated responses are no longer cached in transients.
+* Added atomic per-import run locking to prevent duplicate extract/stage runs for the same import job.
+* Added imported-item and media-source lookup tables with upgrade backfill and legacy postmeta fallback for high-volume imports.
+* Added filterable JSON payload and record limits for non-streaming JSON imports.
+* Made raw API record retention debug-only and disabled by default; disabling retention purges stored `_tporapdi_raw_record` meta.
 
 = 1.4.0 =
 * Added per-import Payload Format selection with support for JSON and iCal (.ics) feeds.
@@ -336,6 +360,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.4.1 =
+Adds enterprise hardening for previews, run locking, lookup-table dedupe, JSON limits, and raw-record retention. Raw API records are purged by default unless retention is enabled in Settings.
+
 = 1.4.0 =
 Adds JSON/iCal payload format selection and iCal recurrence expansion. Existing imports continue to default to JSON.
 

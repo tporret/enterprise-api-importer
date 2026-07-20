@@ -67,28 +67,9 @@ class Tporapdi_Media_Ingestor {
 		}
 
 		// Deduplication: return existing attachment if source URL already ingested.
-		$existing = new WP_Query(
-			array(
-				'post_type'              => 'attachment',
-				'post_status'            => 'any',
-				'fields'                 => 'ids',
-				'posts_per_page'         => 1,
-				'no_found_rows'          => true,
-				'ignore_sticky_posts'    => true,
-				'update_post_meta_cache' => false,
-				'update_post_term_cache' => false,
-				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Attachment dedupe is keyed by plugin-owned source URL meta.
-					array(
-						'key'     => '_tporapdi_source_url',
-						'value'   => $source_url,
-						'compare' => '=',
-					),
-				),
-			)
-		);
+		$existing_attachment_id = tporapdi_get_attachment_id_by_source_url( $source_url );
 
-		if ( ! empty( $existing->posts ) ) {
-			$existing_attachment_id   = (int) $existing->posts[0];
+		if ( $existing_attachment_id > 0 ) {
 			$url_cache[ $source_url ] = $existing_attachment_id;
 			if ( $is_featured ) {
 				set_post_thumbnail( $post_id, $existing_attachment_id );
@@ -145,6 +126,7 @@ class Tporapdi_Media_Ingestor {
 
 		$attachment_id = (int) $attachment_id;
 		update_post_meta( $attachment_id, '_tporapdi_source_url', $source_url );
+		tporapdi_upsert_media_source_lookup( $source_url, $attachment_id );
 		$url_cache[ $source_url ] = $attachment_id;
 
 		if ( $is_featured ) {
