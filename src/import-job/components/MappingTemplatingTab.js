@@ -192,6 +192,7 @@ export default function MappingTemplatingTab( {
 				path: '/tporret-api-data-importer/v1/dry-run',
 				method: 'POST',
 				data: {
+					import_id: job.id || 0,
 					api_url: job.endpoint_url,
 					data_format: job.data_format,
 					title_template: job.title_template,

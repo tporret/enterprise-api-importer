@@ -186,6 +186,39 @@ function tporapdi_register_rest_routes() {
 add_action( 'rest_api_init', 'tporapdi_register_rest_routes' );
 
 /**
+ * Restores masked credentials for an existing import job.
+ *
+ * @param array<string, mixed> &$params Request parameters (modified by reference).
+ *
+ * @return WP_REST_Response|null Error response when the import does not exist.
+ */
+function tporapdi_rest_restore_unchanged_credentials( array &$params ) {
+	$import_id = absint( $params['import_id'] ?? 0 );
+	if ( $import_id <= 0 ) {
+		return null;
+	}
+
+	$existing = tporapdi_db_get_import_config( $import_id );
+	if ( ! is_array( $existing ) ) {
+		return new WP_REST_Response(
+			array(
+				'code'    => 'not_found',
+				'message' => esc_html__( 'Import job not found.', 'tporret-api-data-importer' ),
+			),
+			404
+		);
+	}
+
+	foreach ( tporapdi_get_credential_field_names() as $field ) {
+		if ( ! isset( $params[ $field ] ) || '' === (string) $params[ $field ] ) {
+			$params[ $field ] = isset( $existing[ $field ] ) ? (string) $existing[ $field ] : '';
+		}
+	}
+
+	return null;
+}
+
+/**
  * Executes a dry-run Twig preview against a live API response without persisting any data.
  *
  * @param WP_REST_Request $request REST request.
@@ -193,8 +226,14 @@ add_action( 'rest_api_init', 'tporapdi_register_rest_routes' );
  * @return WP_REST_Response
  */
 function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
-	$params           = $request->get_json_params();
-	$params           = is_array( $params ) ? $params : array();
+	$params = $request->get_json_params();
+	$params = is_array( $params ) ? $params : array();
+
+	$credential_error = tporapdi_rest_restore_unchanged_credentials( $params );
+	if ( $credential_error instanceof WP_REST_Response ) {
+		return $credential_error;
+	}
+
 	$api_url          = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
 	$data_filters     = isset( $params['data_filters'] ) && is_array( $params['data_filters'] ) ? $params['data_filters'] : array();
 	$title_template   = isset( $params['title_template'] ) ? (string) $params['title_template'] : '';
@@ -354,8 +393,14 @@ function tporapdi_rest_dry_run_template_preview( WP_REST_Request $request ) {
  * @return WP_REST_Response
  */
 function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
-	$params           = $request->get_json_params();
-	$params           = is_array( $params ) ? $params : array();
+	$params = $request->get_json_params();
+	$params = is_array( $params ) ? $params : array();
+
+	$credential_error = tporapdi_rest_restore_unchanged_credentials( $params );
+	if ( $credential_error instanceof WP_REST_Response ) {
+		return $credential_error;
+	}
+
 	$api_url          = isset( $params['api_url'] ) ? esc_url_raw( trim( (string) $params['api_url'] ) ) : '';
 	$array_path       = isset( $params['array_path'] ) ? sanitize_text_field( (string) $params['array_path'] ) : '';
 	$csv_delimiter    = isset( $params['csv_delimiter'] ) ? sanitize_key( (string) $params['csv_delimiter'] ) : '';
@@ -437,7 +482,6 @@ function tporapdi_rest_test_api_connection( WP_REST_Request $request ) {
 			'success'        => true,
 			'message'        => esc_html__( 'API connection successful.', 'tporret-api-data-importer' ),
 			'status_code'    => $status_code,
-			'item_count'     => count( $preview_records ),
 			'available_keys' => $available_keys,
 			'sample_data'    => $sample_item,
 			'sample_json'    => $sample_json,
@@ -612,10 +656,11 @@ function tporapdi_rest_update_import_job( WP_REST_Request $request ) {
  *
  * @param int    $id              Import job ID.
  * @param string $success_message Localised success message.
+ * @param string $trigger_source  Runner trigger source.
  *
  * @return WP_REST_Response
  */
-function tporapdi_rest_start_manual_run_response( $id, $success_message ) {
+function tporapdi_rest_start_manual_run_response( $id, $success_message, $trigger_source = 'manual' ) {
 	$row = tporapdi_db_get_import_config( $id );
 
 	if ( ! is_array( $row ) ) {
@@ -628,7 +673,7 @@ function tporapdi_rest_start_manual_run_response( $id, $success_message ) {
 		);
 	}
 
-	$start_result = tporapdi_get_import_runner()->start_manual_run( $id, 'manual' );
+	$start_result = tporapdi_get_import_runner()->start_manual_run( $id, $trigger_source );
 	if ( is_wp_error( $start_result ) ) {
 		$status = 'import_running' === $start_result->get_error_code() ? 409 : 400;
 
@@ -674,7 +719,8 @@ function tporapdi_rest_run_import_job( WP_REST_Request $request ) {
 function tporapdi_rest_template_sync_import_job( WP_REST_Request $request ) {
 	return tporapdi_rest_start_manual_run_response(
 		absint( $request->get_param( 'id' ) ),
-		esc_html__( 'Template sync started.', 'tporret-api-data-importer' )
+		esc_html__( 'Template sync started.', 'tporret-api-data-importer' ),
+		'template_sync'
 	);
 }
 
@@ -733,27 +779,50 @@ function tporapdi_rest_cleanup_import_job( WP_REST_Request $request ) {
 		);
 	}
 
-	$cleanup_result = tporapdi_cleanup_import_job_content( $id, $mode );
-	if ( is_wp_error( $cleanup_result ) ) {
+	$runner     = tporapdi_get_import_runner();
+	$lock_state = array(
+		'import_id'       => $id,
+		'run_id'          => wp_generate_uuid4(),
+		'phase'           => 'cleanup',
+		'start_timestamp' => time(),
+		'last_heartbeat'  => time(),
+	);
+
+	if ( ! $runner->acquire_active_run_state( $lock_state ) ) {
 		return new WP_REST_Response(
 			array(
-				'code'    => $cleanup_result->get_error_code(),
-				'message' => $cleanup_result->get_error_message(),
+				'code'    => 'import_running',
+				'message' => esc_html__( 'This import is currently running.', 'tporret-api-data-importer' ),
 			),
-			500
+			409
 		);
 	}
 
-	return new WP_REST_Response(
-		array(
-			'success' => true,
-			'message' => 'delete' === $mode
-				? esc_html__( 'Imported posts and related data were permanently deleted.', 'tporret-api-data-importer' )
-				: esc_html__( 'Imported posts were moved to trash and related data was cleared.', 'tporret-api-data-importer' ),
-			'results' => $cleanup_result,
-		),
-		200
-	);
+	try {
+		$cleanup_result = tporapdi_cleanup_import_job_content( $id, $mode );
+		if ( is_wp_error( $cleanup_result ) ) {
+			return new WP_REST_Response(
+				array(
+					'code'    => $cleanup_result->get_error_code(),
+					'message' => $cleanup_result->get_error_message(),
+				),
+				500
+			);
+		}
+
+		return new WP_REST_Response(
+			array(
+				'success' => true,
+				'message' => 'delete' === $mode
+					? esc_html__( 'Imported posts and related data were permanently deleted.', 'tporret-api-data-importer' )
+					: esc_html__( 'Imported posts were moved to trash and related data was cleared.', 'tporret-api-data-importer' ),
+				'results' => $cleanup_result,
+			),
+			200
+		);
+	} finally {
+		$runner->clear_active_run_state( $id );
+	}
 }
 
 /**

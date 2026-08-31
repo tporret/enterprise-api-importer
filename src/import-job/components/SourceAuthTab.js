@@ -39,6 +39,7 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 				path: '/tporret-api-data-importer/v1/test-api-connection',
 				method: 'POST',
 				data: {
+					import_id: job.id || 0,
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
 					csv_delimiter: job.csv_delimiter,
@@ -55,7 +56,6 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 			setTestResult( {
 				status: 'success',
 				message: result.message || __( 'Connection successful!', 'tporret-api-data-importer' ),
-				itemCount: result.item_count,
 				keys: result.available_keys,
 			} );
 
@@ -129,10 +129,6 @@ export default function SourceAuthTab( { job, updateField, setNotice, setPreview
 						<p><strong>{ testResult.message }</strong></p>
 						{ testResult.status === 'success' && (
 							<>
-								<p>
-									{ __( 'Items Found:', 'tporret-api-data-importer' ) }{ ' ' }
-									<strong>{ testResult.itemCount }</strong>
-								</p>
 								{ testResult.keys && testResult.keys.length > 0 && (
 									<p>
 										{ __( 'Available Fields:', 'tporret-api-data-importer' ) }{ ' ' }

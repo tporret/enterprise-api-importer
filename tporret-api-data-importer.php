@@ -3,13 +3,13 @@
  * Plugin Name: tporret API Data Importer
  * Plugin URI:  https://github.com/tporret/enterprise-api-importer
  * Description: Highly secure enterprise ETL importer for WordPress.
- * Version:     1.4.1
+ * Version:     1.4.2
  * Author:      tporret
  * License:     GPL-2.0-or-later
  * Donate link: https://porretto.com/donate
  * Requires at least: 6.3
  * Requires PHP: 8.1
- * Tested up to: 7.0.0
+ * Tested up to: 7.1
  * Text Domain: tporret-api-data-importer
  *
  * @package EnterpriseAPIImporter
@@ -28,7 +28,7 @@ if ( ! defined( 'TPORAPDI_PLUGIN_FILE' ) ) {
 }
 
 if ( ! defined( 'TPORAPDI_PLUGIN_VERSION' ) ) {
-	define( 'TPORAPDI_PLUGIN_VERSION', '1.4.1' );
+	define( 'TPORAPDI_PLUGIN_VERSION', '1.4.2' );
 }
 
 if ( ! defined( 'TPORAPDI_ADMIN_REST_NAMESPACE' ) ) {

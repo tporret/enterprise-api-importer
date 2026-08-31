@@ -837,6 +837,10 @@ function tporapdi_get_trigger_source_label( $trigger_source ) {
 		return __( 'Recurring Schedule', 'tporret-api-data-importer' );
 	}
 
+	if ( 'template_sync' === $trigger_source ) {
+		return __( 'Template Sync', 'tporret-api-data-importer' );
+	}
+
 	return __( 'Unknown', 'tporret-api-data-importer' );
 }
 
@@ -1353,7 +1357,11 @@ function tporapdi_handle_manual_import_run() {
 		exit;
 	}
 
-	$start_result = tporapdi_get_import_runner()->start_manual_run( $import_id, 'manual' );
+	$template_sync  = isset( $_POST['tporapdi_template_sync'] )
+		? sanitize_text_field( (string) wp_unslash( $_POST['tporapdi_template_sync'] ) )
+		: '';
+	$trigger_source = '1' === $template_sync ? 'template_sync' : 'manual';
+	$start_result   = tporapdi_get_import_runner()->start_manual_run( $import_id, $trigger_source );
 	if ( is_wp_error( $start_result ) ) {
 		wp_safe_redirect(
 			add_query_arg(
@@ -1369,10 +1377,7 @@ function tporapdi_handle_manual_import_run() {
 		exit;
 	}
 
-	$notice_code   = 'import_started';
-	$template_sync = isset( $_POST['tporapdi_template_sync'] )
-		? sanitize_text_field( (string) wp_unslash( $_POST['tporapdi_template_sync'] ) )
-		: '';
+	$notice_code = 'import_started';
 
 	if ( '1' === $template_sync ) {
 		$notice_code = 'template_sync_started';

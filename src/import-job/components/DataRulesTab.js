@@ -88,6 +88,7 @@ export default function DataRulesTab( {
 				path: '/tporret-api-data-importer/v1/test-api-connection',
 				method: 'POST',
 				data: {
+					import_id: job.id || 0,
 					api_url: job.endpoint_url,
 					array_path: job.array_path,
 					csv_delimiter: job.csv_delimiter,

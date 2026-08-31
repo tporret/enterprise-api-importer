@@ -104,7 +104,7 @@ if ( $imported_items->have_posts() ) {
 }
 ```
 
-## Latest Release (1.4.1)
+## Latest Release (1.4.2)
 
 - Added CSV/TSV (`csv`) and XML/RSS (`xml`) payload format support to the shared extraction pipeline used by endpoint testing, preview, dry-run, and import runtime.
 - Added `csv_delimiter` and `xml_node_element` persistence/migrations for existing installs so format-specific settings remain stable across upgrades.
@@ -718,7 +718,7 @@ Built-in Twig extensions:
 
 ## Requirements
 
-- WordPress 6.3 through 7.0.0
+- WordPress 6.3 through 7.1
 - PHP 8.1+
 - Composer dependency: `twig/twig`
 

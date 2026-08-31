@@ -148,10 +148,11 @@ class TPORAPDI_Import_Runner {
 	 * @return array{rows_processed: int, rows_created: int, rows_updated: int, errors: array<int, string>, timed_out: bool}
 	 */
 	public function process_chunk( array $chunk_items, array $processing_config, int $row_id, int $row_import_id, float $started_at_microtime, int $max_runtime_seconds ): array {
-		$existing_post_ids = tporapdi_get_existing_imported_post_ids_by_external_ids(
+		$existing_post_ids    = tporapdi_get_existing_imported_post_ids_by_external_ids(
 			$this->collect_chunk_external_ids( $chunk_items, (string) $processing_config['unique_id_path'] ),
 			$row_import_id
 		);
+		$update_existing_only = ! empty( $processing_config['update_existing_only'] );
 
 		$result = array(
 			'rows_processed' => 0,
@@ -165,6 +166,11 @@ class TPORAPDI_Import_Runner {
 			if ( ( microtime( true ) - $started_at_microtime ) >= $max_runtime_seconds ) {
 				$result['timed_out'] = true;
 				break;
+			}
+
+			$external_id = tporapdi_get_item_value_by_path( $item, (string) $processing_config['unique_id_path'] );
+			if ( $update_existing_only && is_scalar( $external_id ) && ! isset( $existing_post_ids[ (string) $external_id ] ) ) {
+				continue;
 			}
 
 			++$result['rows_processed'];
@@ -197,10 +203,11 @@ class TPORAPDI_Import_Runner {
 	 * @param array<string, mixed> $staged_row            Raw staging row.
 	 * @param float                $started_at_microtime Slice start time.
 	 * @param int                  $max_runtime_seconds  Maximum allowed runtime.
+	 * @param bool                 $update_existing_only Whether to skip records without an existing linked post.
 	 *
 	 * @return array{temp_rows_processed: int, rows_processed: int, rows_created: int, rows_updated: int, errors: array<int, string>, timed_out: bool, has_remaining: bool}
 	 */
-	public function process_staging_row( array $staged_row, float $started_at_microtime, int $max_runtime_seconds ): array {
+	public function process_staging_row( array $staged_row, float $started_at_microtime, int $max_runtime_seconds, bool $update_existing_only = false ): array {
 		$result = array(
 			'temp_rows_processed' => 0,
 			'rows_processed'      => 0,
@@ -251,9 +258,10 @@ class TPORAPDI_Import_Runner {
 			return $result;
 		}
 
-		$items             = tporapdi_normalize_staged_items( $decoded_items );
-		$processing_config = $this->get_processing_stage_config( $import_job );
-		$chunk_result      = $this->process_chunk(
+		$items                                     = tporapdi_normalize_staged_items( $decoded_items );
+		$processing_config                         = $this->get_processing_stage_config( $import_job );
+		$processing_config['update_existing_only'] = $update_existing_only;
+		$chunk_result                              = $this->process_chunk(
 			$items,
 			$processing_config,
 			$row_id,
@@ -299,10 +307,11 @@ class TPORAPDI_Import_Runner {
 	 * @param float $started_at_microtime Slice start time from microtime(true).
 	 * @param int   $import_id            Import job ID.
 	 * @param int   $max_runtime_seconds  Maximum allowed runtime.
+	 * @param bool  $update_existing_only Whether to skip records without an existing linked post.
 	 *
 	 * @return array<string, mixed>|WP_Error
 	 */
-	public function process_unprocessed_staging_rows( float $started_at_microtime, int $import_id, int $max_runtime_seconds = 45 ) {
+	public function process_unprocessed_staging_rows( float $started_at_microtime, int $import_id, int $max_runtime_seconds = 45, bool $update_existing_only = false ) {
 		$import_id   = absint( $import_id );
 		$staged_rows = Tporapdi_Queue_Repository::get_unprocessed( $import_id, 10 );
 
@@ -335,7 +344,8 @@ class TPORAPDI_Import_Runner {
 			$row_result = $this->process_staging_row(
 				is_array( $staged_row ) ? $staged_row : array(),
 				$started_at_microtime,
-				$max_runtime_seconds
+				$max_runtime_seconds,
+				$update_existing_only
 			);
 
 			$result['temp_rows_processed'] += (int) $row_result['temp_rows_processed'];
@@ -396,7 +406,8 @@ class TPORAPDI_Import_Runner {
 		$import_id       = absint( $state['import_id'] );
 		$state['slices'] = isset( $state['slices'] ) ? ( (int) $state['slices'] + 1 ) : 1;
 
-		$processing_result = $this->process_unprocessed_staging_rows( microtime( true ), $import_id, 45 );
+		$update_existing_only = isset( $state['trigger_source'] ) && 'template_sync' === $state['trigger_source'];
+		$processing_result    = $this->process_unprocessed_staging_rows( microtime( true ), $import_id, 45, $update_existing_only );
 
 		if ( is_wp_error( $processing_result ) ) {
 			$this->write_failed_processing_log( $import_id, $state, $processing_result );
@@ -492,7 +503,7 @@ class TPORAPDI_Import_Runner {
 	 *
 	 * @return bool True when the lock was acquired.
 	 */
-	private function acquire_active_run_state( array $state ): bool {
+	public function acquire_active_run_state( array $state ): bool {
 		$import_id = absint( $state['import_id'] ?? 0 );
 
 		if ( $import_id <= 0 ) {
@@ -522,7 +533,7 @@ class TPORAPDI_Import_Runner {
 	 */
 	private function normalize_trigger_source( string $trigger_source ): string {
 		$trigger_source  = sanitize_key( $trigger_source );
-		$allowed_sources = array( 'manual', 'run_now', 'recurring' );
+		$allowed_sources = array( 'manual', 'run_now', 'recurring', 'template_sync' );
 
 		if ( ! in_array( $trigger_source, $allowed_sources, true ) ) {
 			return 'run_now';
@@ -867,7 +878,10 @@ class TPORAPDI_Import_Runner {
 			tporapdi_reconcile_pending_parent_mappings( $import_id, $target_post_type );
 		}
 
-		$orphans_trashed = tporapdi_trash_orphaned_imported_posts( (int) $state['start_timestamp'], $import_id, $target_post_type );
+		$is_template_sync = isset( $state['trigger_source'] ) && 'template_sync' === $state['trigger_source'];
+		$orphans_trashed  = $is_template_sync
+			? 0
+			: tporapdi_trash_orphaned_imported_posts( (int) $state['start_timestamp'], $import_id, $target_post_type );
 
 		if ( is_wp_error( $orphans_trashed ) ) {
 			$existing_errors   = isset( $state['errors'] ) && is_array( $state['errors'] ) ? $state['errors'] : array();
