@@ -42,12 +42,24 @@ class Tporapdi_Media_Ingestor {
 		$post_id     = absint( $post_id );
 		$is_featured = (bool) $is_featured;
 
-		if ( '' === $image_url || $post_id <= 0 || ! wp_http_validate_url( $image_url ) ) {
+		if ( '' === $image_url || $post_id <= 0 ) {
 			self::log_media_error(
 				'Invalid Media URL',
 				$image_url,
 				$post_id,
 				__( 'Invalid media URL or post ID supplied for sideload.', 'tporret-api-data-importer' )
+			);
+
+			return false;
+		}
+
+		$endpoint_validation = tporapdi_validate_remote_endpoint_url( $image_url );
+		if ( is_wp_error( $endpoint_validation ) ) {
+			self::log_media_error(
+				'Invalid Media URL',
+				$image_url,
+				$post_id,
+				$endpoint_validation->get_error_message()
 			);
 
 			return false;

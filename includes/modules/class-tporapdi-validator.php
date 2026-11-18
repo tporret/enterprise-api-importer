@@ -116,8 +116,15 @@ class TPORAPDI_Validator {
 		$parent_mapping_json       = $this->sanitize_parent_mapping( $params['parent_mapping'] ?? null, $target_post_type );
 		$media_mappings_json       = $this->sanitize_media_mappings( $params['media_mappings'] ?? null );
 
-		$auth_token    = tporapdi_encrypt_credential( $auth_token );
+		$auth_token = tporapdi_encrypt_credential( $auth_token );
+		if ( is_wp_error( $auth_token ) ) {
+			return $this->rest_error( $auth_token->get_error_code(), $auth_token->get_error_message(), 500 );
+		}
+
 		$auth_password = tporapdi_encrypt_credential( $auth_password );
+		if ( is_wp_error( $auth_password ) ) {
+			return $this->rest_error( $auth_password->get_error_code(), $auth_password->get_error_message(), 500 );
+		}
 
 		$data = array(
 			'name'                       => $name,

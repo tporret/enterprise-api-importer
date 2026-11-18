@@ -739,12 +739,11 @@ function tporapdi_get_encryption_key() {
 /**
  * Encrypts a plaintext credential for safe at-rest storage.
  *
- * Returns the original value unchanged when the OpenSSL extension is
- * unavailable or the input is already encrypted.
+ * Returns a WP_Error when encryption is unavailable or fails.
  *
  * @param string $plaintext Credential to encrypt.
  *
- * @return string Encrypted string prefixed with TPORAPDI_ENCRYPTED_PREFIX, or original on failure.
+ * @return string|WP_Error Encrypted credential, or an error when encryption fails.
  */
 function tporapdi_encrypt_credential( $plaintext ) {
 	$plaintext = (string) $plaintext;
@@ -759,26 +758,39 @@ function tporapdi_encrypt_credential( $plaintext ) {
 	}
 
 	if ( ! function_exists( 'openssl_encrypt' ) ) {
-		return $plaintext;
+		return new WP_Error(
+			'tporapdi_credential_encryption_unavailable',
+			__( 'Credential encryption is unavailable because the OpenSSL extension is not loaded.', 'tporret-api-data-importer' )
+		);
 	}
 
 	$key    = tporapdi_get_encryption_key();
 	$iv_len = openssl_cipher_iv_length( TPORAPDI_CIPHER_METHOD );
 
 	if ( false === $iv_len || $iv_len <= 0 ) {
-		return $plaintext;
+		return new WP_Error(
+			'tporapdi_credential_encryption_failed',
+			__( 'Credential encryption could not be initialized.', 'tporret-api-data-importer' )
+		);
 	}
 
-	$iv = openssl_random_pseudo_bytes( $iv_len );
+	$strong_result = false;
+	$iv            = openssl_random_pseudo_bytes( $iv_len, $strong_result );
 
-	if ( false === $iv ) {
-		return $plaintext;
+	if ( false === $iv || ! $strong_result ) {
+		return new WP_Error(
+			'tporapdi_credential_encryption_failed',
+			__( 'A secure initialization vector could not be generated for credential encryption.', 'tporret-api-data-importer' )
+		);
 	}
 
 	$ciphertext = openssl_encrypt( $plaintext, TPORAPDI_CIPHER_METHOD, $key, OPENSSL_RAW_DATA, $iv );
 
 	if ( false === $ciphertext ) {
-		return $plaintext;
+		return new WP_Error(
+			'tporapdi_credential_encryption_failed',
+			__( 'Credential encryption failed.', 'tporret-api-data-importer' )
+		);
 	}
 
 	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Required for safe binary storage in DB text columns.

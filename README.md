@@ -104,15 +104,11 @@ if ( $imported_items->have_posts() ) {
 }
 ```
 
-## Latest Release (1.4.2)
+## Latest Release (1.4.3)
 
-- Added CSV/TSV (`csv`) and XML/RSS (`xml`) payload format support to the shared extraction pipeline used by endpoint testing, preview, dry-run, and import runtime.
-- Added `csv_delimiter` and `xml_node_element` persistence/migrations for existing installs so format-specific settings remain stable across upgrades.
-- Added streaming extraction + staging for CSV/XML records to avoid materializing very large payloads in memory before queue writes.
-- Hardened preview and runtime scalability: CSV/XML previews now stop after the needed sample records, JSON imports have filterable payload/record caps, and authenticated API responses are no longer cached.
-- Added atomic per-import run locking so concurrent cron/manual triggers cannot start duplicate extract/stage runs for the same job.
-- Added imported-item and media-source lookup tables with backfill and legacy postmeta fallback to remove hot postmeta scans from high-volume import matching and media dedupe.
-- Raw API record postmeta is now debug-only and disabled by default; disabling the setting purges `_tporapdi_raw_record` values.
+- Enforced endpoint security policy on every media download path, including images rendered into imported content.
+- Credential saves now fail closed when encryption is unavailable or fails; the PHP OpenSSL extension is required.
+- Added security regression checks for blocked media downloads and credential encryption failures to the release gate.
 
 ## Current Development Changes (Unreleased)
 
@@ -720,6 +716,7 @@ Built-in Twig extensions:
 
 - WordPress 6.3 through 7.1
 - PHP 8.1+
+- PHP OpenSSL extension (required to encrypt stored API credentials)
 - Composer dependency: `twig/twig`
 
 Install dependency in plugin root:

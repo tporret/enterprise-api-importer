@@ -4,6 +4,7 @@
     "license": "GPL-2.0-or-later",
     "require": {
         "php": ">=8.1",
+        "ext-openssl": "*",
         "twig/twig": "^3.24",
         "sabre/vobject": "^4"
     },

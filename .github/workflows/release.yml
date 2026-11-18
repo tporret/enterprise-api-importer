@@ -281,6 +281,10 @@ jobs:
             ${PM} run check:php
           fi
 
+          if node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts.test ? 0 : 1);"; then
+            ${PM} run test
+          fi
+
           # Resolve build command.
           BUILD_SCRIPT=""
           if [ -f .github/plugin-config ]; then

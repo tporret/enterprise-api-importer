@@ -5,7 +5,7 @@ Tags: api, import, etl, ical, xml
 Requires at least: 6.3
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.4.2
+Stable tag: 1.4.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,7 @@ Use tporret API Data Importer to run clean, repeatable import workflows without 
 - Lookup-table-backed imported item matching and media deduplication for high-volume imports
 - Filterable JSON payload and record caps; use pagination or CSV/XML for very large feeds
 - Raw API record retention is disabled by default and available only as a debug setting
+- The PHP OpenSSL extension is required to encrypt stored API credentials; credential saves fail closed if encryption is unavailable
 - Multisite support with per-site importer dashboards and an optional Network Admin summary dashboard when the plugin is also active on the primary site
 - **[New v1.3] Deep Module Architecture (internal):**
   - `Tporapdi_Validator` — single validation seam for all import job fields
@@ -228,6 +229,17 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 
 == Changelog ==
 
+= 1.4.3 =
+* Enforced the endpoint security policy on all media downloads, including images rendered into imported content.
+* Credential saves now fail closed when encryption is unavailable or fails; the PHP OpenSSL extension is required.
+* Added security regression checks for blocked media downloads and credential encryption failures to the release gate.
+
+= 1.4.2 =
+* Added CSV/TSV and XML/RSS payload support, including streaming extraction and staging for large feeds.
+* Added sample-only previews, configurable JSON payload and record caps, and atomic per-import run locks.
+* Added imported-item and media-source lookup tables with upgrade backfill and legacy postmeta fallback.
+* Disabled raw API record retention by default and purge retained records when the setting is disabled.
+
 = 1.4.1 =
 * Hardened preview scalability: CSV/XML previews stop after the requested sample records instead of parsing whole feeds.
 * Hardened API response caching: authenticated responses are no longer cached in transients.
@@ -360,6 +372,9 @@ The plugin does not hardcode any third-party API vendor. Data destination, terms
 * Added secure media sideload helper foundation with source URL deduplication metadata.
 
 == Upgrade Notice ==
+= 1.4.3 =
+Hardens endpoint enforcement for media downloads and prevents credential saves when OpenSSL encryption is unavailable.
+
 = 1.4.1 =
 Adds enterprise hardening for previews, run locking, lookup-table dedupe, JSON limits, and raw-record retention. Raw API records are purged by default unless retention is enabled in Settings.
 
